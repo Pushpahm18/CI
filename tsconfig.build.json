@@ -1,0 +1,7 @@
+{
+  // Used only by `next build` (see next.config.ts). Same strict settings as tsconfig.json, but the unit tests and the
+  // Vitest config are left out: Vitest is a devDependency, which a production install (e.g. Databricks Apps) omits.
+  // tsconfig.json still covers everything, so editors and local type-checks see the tests.
+  "extends": "./tsconfig.json",
+  "exclude": ["node_modules", "**/*.test.ts", "**/*.test.tsx", "vitest.config.ts"]
+}
