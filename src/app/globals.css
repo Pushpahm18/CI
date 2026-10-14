@@ -1,0 +1,349 @@
+@import "tailwindcss";
+
+:root {
+  /* =====================================================================
+     ASM Corporate Brand Guidelines (v1, 30.03.2023) — literal palette
+     tokens, taken verbatim from the guideline's "color palette in numbers"
+     page. Every semantic token below (--accent, --sidebar-bg, --spark-*,
+     etc.) is defined IN TERMS OF these, so the whole app stays on exactly
+     one source of truth for brand color rather than duplicating hex values
+     across files. Reference these directly (e.g. `var(--asm-turquoise-dark)`)
+     only for something with no existing semantic token yet (e.g. the
+     destination-grid tint); prefer the semantic tokens everywhere else so
+     intent stays legible in component code. */
+  --asm-purple: #5f4664; /* ASM Innovation Purple — main color */
+  --asm-purple-dark: #411441;
+  --asm-purple-light: #8e7a96;
+  --asm-sand: #f5f0eb; /* ASM Silicon Sand — main color */
+  --asm-sand-dark: #e1d7cd;
+  --asm-sand-medium: #f0e6dc;
+  --asm-white: #ffffff; /* main color */
+  --asm-amber-dark: #f59123;
+  --asm-amber-medium: #fab441;
+  --asm-amber-light: #fac88c;
+  --asm-turquoise-dark: #2d7d87;
+  --asm-turquoise-medium: #00b4c3;
+  --asm-turquoise-light: #87cdd7;
+  --asm-gray: #44454c; /* ASM Excellence Gray */
+  --asm-black-85: #494948; /* preferred body-copy color per guideline */
+  --asm-black-100: #000000;
+
+  /* Neutrals — Silicon Sand as the large background surface (guideline:
+     "Innovation Purple and Silicon Sand are our main colors ... applied as
+     background color on large areas, combined with white"), white for
+     content surfaces/cards, borders interpolated from Silicon Sand Dark so
+     they read as part of the same warm-neutral family instead of a
+     mismatched cool gray. Body text uses the guideline's specified 85%
+     Black rather than a pure/near-black. */
+  --background: var(--asm-sand);
+  --surface: var(--asm-white);
+  --surface-alt: var(--asm-sand-medium);
+  --foreground: var(--asm-black-85);
+  --muted: #635a68;
+  --muted-2: #948c9a;
+  --border: #e6ddd2;
+  --border-strong: #d3c4b4;
+
+  /* ASM Innovation Purple — the main color, and per the guideline's own
+     color-hierarchy page, the preferred color for headings on white/sand
+     backgrounds and for primary navigation/branded elements. */
+  --accent: var(--asm-purple);
+  --accent-hover: var(--asm-purple-dark);
+  --accent-foreground: var(--asm-white);
+  --accent-bg: #f3eef4; /* ~20% Innovation Purple over white, per the guideline's opacity convention */
+  --accent-bg-strong: #e7dbe9; /* ~40% */
+
+  --success: #1f7a4c;
+  --success-bg: #e5f4ec;
+  /* Warning re-based on the ASM Optimistic Amber family — a real supporting
+     brand color that also happens to be the conventional "caution" hue.
+     The literal Optimistic Amber Dark swatch (#f59123) only reaches ~2.1:1
+     against white/warning-bg (checked with a WCAG contrast calculation) —
+     nowhere near the 4.5:1 required for real text — so this is a further-
+     darkened shade of that same amber hue, guaranteeing accessible text
+     contrast (5.8:1 / 5.2:1) without abandoning the amber family or
+     inventing an unrelated color. */
+  --warning: #935715;
+  --warning-bg: #fdf1e2;
+  --danger: #b3261e;
+  --danger-bg: #fbe7e6;
+  --info: #2b5fa0;
+  --info-bg: #e7eef8;
+
+  /* Sidebar — flat ASM Innovation Purple (no gradient — see .sidebar-surface
+     below). Active/hover rows stay a purple family tint; the active-item
+     accent bar uses Optimistic Amber Medium, a supporting color the
+     guideline calls out for "clickable buttons, graphics ... interactive
+     elements" — giving the one persistent interactive indicator in the
+     sidebar real contrast against the purple panel instead of another,
+     barely-visible shade of purple. */
+  --sidebar-bg: var(--asm-purple);
+  --sidebar-bg-deep: var(--asm-purple-dark);
+  --sidebar-bg-alt: #4a375080;
+  --sidebar-active-bg: #75596f;
+  --sidebar-hover-bg: #6c5170;
+  --sidebar-border: #6c5570;
+  --sidebar-text: #f5f0f6;
+  --sidebar-text-muted: #cdbdd0;
+  --sidebar-accent-bar: var(--asm-amber-medium);
+
+  /* Column-header KPU highlight, BSD (CR 0786160) item 3.3 — confirmed via
+     screenshot pixel-sampling to be a single orange/tan tone (no separate
+     "Sales" tone exists in the real system). Applied only on All Apps View.
+     Already an exact match for ASM Optimistic Amber Light — no change needed. */
+  --header-kpu: var(--asm-amber-light);
+  --header-kpu-foreground: #4a2e05;
+
+  /* Every data table uses the same solid brand-color header with white
+     text, which matches the guideline's "big background surface" rule
+     (Innovation Purple + white) exactly. */
+  --table-header-solid-bg: var(--accent);
+  --table-header-solid-fg: #ffffff;
+
+  /* Dashboard chart bars — two distinguishable ASM supporting colors. */
+  --chart-1: var(--asm-turquoise-dark);
+  --chart-2: var(--asm-amber-dark);
+
+  /* "Spark" spectrum — decorative accent hues used two ways: (1) an icon
+     foreground drawn on its own pale "-bg" tint (KPI chips), and (2) a
+     solid tile fill with a white icon on top (header ScreenGlyph). Variable
+     NAMES kept as-is (spark-violet/teal/coral/gold) to avoid touching every
+     one of their many call sites across the app;
+     their VALUES are now genuine ASM colors — the earlier violet/teal/
+     coral/gold hues were not ASM brand colors at all.
+     Every one of ASM's Optimistic Amber shades (Dark/Medium/Light) was
+     checked with a WCAG contrast calculation and found too light/bright to
+     ever pass as an icon-on-tint foreground OR host a white icon as a solid
+     fill (best case ~2.3:1, versus the 3:1 minimum for graphical objects) —
+     Amber only works the way --header-kpu already successfully uses it
+     elsewhere: a light amber fill with dark text/icon on top, not the other
+     way round. So amber isn't used for any of these four slots; each is
+     instead a distinct, checked-safe ASM color (Purple Light 3.9–4.8:1,
+     Turquoise Dark 4.2–4.8:1, Excellence Gray 8.1–9.5:1, Purple Dark
+     12.4–15:1, all versus their own tint or white). Never used for table
+     headers, columns, or status semantics — those stay exactly as verified
+     against the real Power App / existing status meaning. */
+  --spark-violet: var(--asm-purple-light);
+  --spark-violet-bg: #f4f2f5;
+  --spark-teal: var(--asm-turquoise-dark);
+  --spark-teal-bg: #eaf2f3;
+  --spark-coral: var(--asm-gray);
+  --spark-coral-bg: #ececed;
+  --spark-gold: var(--asm-purple-dark);
+  --spark-gold-bg: #ece8ec;
+
+  --radius: 0.5rem;
+
+  /* Elevation scale for the "3D / modern enterprise" treatment. Overrides
+     Tailwind's default shadow-* utilities globally via @theme inline below, so
+     existing shadow-sm/md/lg usage across the app picks these up automatically. */
+  --shadow-color: 262 12% 15%;
+  --shadow-xs: 0 1px 2px hsl(var(--shadow-color) / 0.06);
+  --shadow-sm: 0 1px 2px hsl(var(--shadow-color) / 0.06), 0 1px 3px hsl(var(--shadow-color) / 0.1);
+  --shadow-md: 0 2px 4px hsl(var(--shadow-color) / 0.06), 0 6px 16px hsl(var(--shadow-color) / 0.12);
+  --shadow-lg: 0 4px 8px hsl(var(--shadow-color) / 0.08), 0 16px 32px hsl(var(--shadow-color) / 0.16);
+  --shadow-xl: 0 8px 16px hsl(var(--shadow-color) / 0.1), 0 24px 48px hsl(var(--shadow-color) / 0.2);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-alt: var(--surface-alt);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-2: var(--muted-2);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-bg: var(--accent-bg);
+  --color-accent-bg-strong: var(--accent-bg-strong);
+
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+
+  --color-sidebar-bg: var(--sidebar-bg);
+  --color-sidebar-bg-deep: var(--sidebar-bg-deep);
+  --color-sidebar-active-bg: var(--sidebar-active-bg);
+  --color-sidebar-hover-bg: var(--sidebar-hover-bg);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-text: var(--sidebar-text);
+  --color-sidebar-text-muted: var(--sidebar-text-muted);
+  --color-sidebar-accent-bar: var(--sidebar-accent-bar);
+
+  --color-header-kpu: var(--header-kpu);
+  --color-header-kpu-foreground: var(--header-kpu-foreground);
+  --color-table-header-solid-bg: var(--table-header-solid-bg);
+  --color-table-header-solid-fg: var(--table-header-solid-fg);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+
+  --color-spark-violet: var(--spark-violet);
+  --color-spark-violet-bg: var(--spark-violet-bg);
+  --color-spark-teal: var(--spark-teal);
+  --color-spark-teal-bg: var(--spark-teal-bg);
+  --color-spark-coral: var(--spark-coral);
+  --color-spark-coral-bg: var(--spark-coral-bg);
+  --color-spark-gold: var(--spark-gold);
+  --color-spark-gold-bg: var(--spark-gold-bg);
+
+  /* Raw ASM palette exposed as Tailwind utilities too (bg-asm-purple,
+     text-asm-turquoise-dark, etc.) for the rare spot — like the destination
+     grid — that needs an exact brand hue with no existing semantic token. */
+  --color-asm-purple: var(--asm-purple);
+  --color-asm-purple-dark: var(--asm-purple-dark);
+  --color-asm-purple-light: var(--asm-purple-light);
+  --color-asm-sand: var(--asm-sand);
+  --color-asm-sand-dark: var(--asm-sand-dark);
+  --color-asm-sand-medium: var(--asm-sand-medium);
+  --color-asm-white: var(--asm-white);
+  --color-asm-amber-dark: var(--asm-amber-dark);
+  --color-asm-amber-medium: var(--asm-amber-medium);
+  --color-asm-amber-light: var(--asm-amber-light);
+  --color-asm-turquoise-dark: var(--asm-turquoise-dark);
+  --color-asm-turquoise-medium: var(--asm-turquoise-medium);
+  --color-asm-turquoise-light: var(--asm-turquoise-light);
+  --color-asm-gray: var(--asm-gray);
+  --color-asm-black-85: var(--asm-black-85);
+
+  --font-sans: var(--font-inter), -apple-system, "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+  /* ASM-approved heading typeface (Ubuntu) — Inter (--font-sans above)
+     stays the default for body copy, labels, forms, tables, buttons, and
+     navigation, exactly per the guideline's Ubuntu/Inter split. */
+  --font-heading: var(--font-ubuntu), var(--font-sans);
+
+  /* Override Tailwind's default shadow scale with the elevation tokens above. */
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ASM typography rule: Ubuntu for headings/section headings/page titles/
+   subheadings, applied once here so every real heading element across the
+   app (PageHeader's <h1>, CardTitle's <h3>, DialogHeader's <h2>, etc.)
+   picks it up automatically — Inter (the body font above) remains the
+   default for everything that isn't a heading tag: labels, form fields,
+   tables, dropdowns, buttons, navigation, supporting text. Component-level
+   text-color classes (e.g. PageHeader's text-accent) still win over this
+   rule's color, since a class selector outranks this bare tag selector —
+   this only sets the shared default. */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+  font-weight: 500; /* Ubuntu Medium */
+}
+
+/* A utility for heading-styled text that isn't semantically an <hN> tag
+   (e.g. the sidebar's product wordmark). */
+.font-heading {
+  font-family: var(--font-heading);
+}
+
+::selection {
+  background: var(--accent-bg-strong);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* subtle scrollbar for horizontally-scrolling tables */
+.table-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+.table-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+/* ASM brand guideline: "Do NOT use arbitrary gradients" — every gradient
+   below has been flattened to a single ASM-approved solid color. Class
+   names are kept exactly as they were (.sidebar-surface, .gradient-spark-
+   button, .glyph-tone-*, etc.) so no component that references them needs
+   to change; only what they render as changed. */
+
+.sidebar-surface {
+  background: var(--sidebar-bg);
+}
+
+.gradient-spark {
+  background: var(--accent);
+}
+
+.gradient-spark-button {
+  background: var(--accent);
+}
+
+.gradient-spark-button:hover {
+  background: var(--accent-hover);
+}
+
+/* Solid one-pixel "top stripe" accents on cards that want a spot of color
+   without recoloring the whole surface. */
+.accent-rule-violet { background: var(--spark-violet); }
+.accent-rule-teal { background: var(--spark-teal); }
+.accent-rule-coral { background: var(--spark-coral); }
+.accent-rule-gold { background: var(--spark-gold); }
+.accent-rule-plum { background: var(--accent); }
+
+/* Sidebar logo mark — flat Innovation Purple, the guideline's own
+   preference for the logo/brand-mark color on light or brand-colored
+   surfaces. Active-item accent bar — flat Optimistic Amber Medium (see
+   --sidebar-accent-bar above) for real contrast against the purple panel. */
+.logo-mark-gradient {
+  background: var(--accent);
+}
+.nav-accent-gradient {
+  background: var(--sidebar-accent-bar);
+}
+
+/* PageHeader's eyebrow pill (every screen) — a flat, quiet Innovation
+   Purple tint. */
+.eyebrow-gradient {
+  background: var(--accent-bg);
+}
+
+/* Header screen-glyph — the small app-icon tile in the persistent top
+   header bar (ScreenGlyph component), one per screen. Flat ASM-approved
+   fills per tone, no gloss overlay or floating animation — the guideline's
+   "clean, professional, high-tech" direction favors a calm flat tile over
+   a glossy, animated one. */
+/* Five distinct, WCAG-checked-safe fills for a white icon on top (each
+   ≥3.9:1 against white): Purple, Turquoise Dark, Excellence Gray, Purple
+   Dark, Purple Light. Not five arbitrary hues — every one of these is
+   already a semantic token defined above for another purpose (deliberately
+   reused rather than inventing new ASM-adjacent colors just for this tile). */
+.glyph-tone-violet { background: var(--accent); }
+.glyph-tone-teal { background: var(--spark-teal); }
+.glyph-tone-coral { background: var(--spark-coral); }
+.glyph-tone-gold { background: var(--spark-gold); }
+.glyph-tone-plum { background: var(--spark-violet); }
+
+.glyph-gloss {
+  background: transparent;
+}
+
+.glyph-float {
+  animation: none;
+}

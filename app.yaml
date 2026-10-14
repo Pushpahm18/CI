@@ -1,0 +1,35 @@
+# Databricks App runtime config — CI (Next.js: UI + API in one process).
+#
+# Before deploying, check the items marked TODO:
+#  - AUTH_URL must be this app's own address once the app exists in the workspace.
+#  - The four valueFrom entries read app RESOURCES named azure_tenant_id, azure_client_id, azure_client_secret and
+#    auth_secret (secrets). Create them on the app (Configure -> App resources) before starting it.
+#  - The app's service principal needs CAN USE on the SQL warehouse (resource "sql-warehouse" in databricks.yml) and
+#    Unity Catalog privileges on corp_marketing_dev (see docs/ci-technical-reference.md, section 33).
+# No Databricks token is needed: the app signs in to the warehouse as its own service principal.
+# Never set DEV_MOCK_AUTH here; the development login is also refused when NODE_ENV is production.
+
+command:
+  - node
+  - scripts/start-server.mjs
+
+env:
+  - name: HOSTNAME
+    value: "0.0.0.0"
+  - name: NODE_ENV
+    value: "production"
+  - name: DATABRICKS_HOST
+    value: "https://dbc-1c848f8a-9f0d.cloud.databricks.com"
+  - name: DATABRICKS_WAREHOUSE_HTTP_PATH
+    value: "/sql/1.0/warehouses/cf3342f06e805a5e"
+  # TODO: replace with this app's own URL after the first deploy. The Microsoft redirect URI is AUTH_URL + /api/auth/callback/microsoft-entra-id
+  - name: AUTH_URL
+    value: "https://ci-app-dev-7474659766206100.aws.databricksapps.com"
+  - name: AZURE_TENANT_ID
+    valueFrom: azure_tenant_id
+  - name: AZURE_CLIENT_ID
+    valueFrom: azure_client_id
+  - name: AZURE_CLIENT_SECRET
+    valueFrom: azure_client_secret
+  - name: AUTH_SECRET
+    valueFrom: auth_secret

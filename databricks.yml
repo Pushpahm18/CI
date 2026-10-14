@@ -1,0 +1,61 @@
+bundle:
+  name: ci-app
+
+variables:
+  app_name:
+    description: Databricks App name
+    default: ci-app-dev
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-1c848f8a-9f0d.cloud.databricks.com
+
+resources:
+  apps:
+    ci_app:
+      name: ${var.app_name}
+      description: Competitive Intelligence React UI + API (Unity Catalog Delta via SQL Warehouse)
+      source_code_path: .
+      # Keep this config equal to app.yaml.
+      config:
+        command:
+          - node
+          - scripts/start-server.mjs
+        env:
+          - name: HOSTNAME
+            value: "0.0.0.0"
+          - name: NODE_ENV
+            value: "production"
+          - name: DATABRICKS_HOST
+            value: https://dbc-1c848f8a-9f0d.cloud.databricks.com
+          - name: DATABRICKS_WAREHOUSE_HTTP_PATH
+            value: /sql/1.0/warehouses/cf3342f06e805a5e
+          # TODO: replace with this app's own URL after the first deploy.
+          - name: AUTH_URL
+            value: https://ci-app-dev-7474659766206100.aws.databricksapps.com
+          - name: AZURE_TENANT_ID
+            valueFrom: azure_tenant_id
+          - name: AZURE_CLIENT_ID
+            valueFrom: azure_client_id
+          - name: AZURE_CLIENT_SECRET
+            valueFrom: azure_client_secret
+          - name: AUTH_SECRET
+            valueFrom: auth_secret
+      resources:
+        # Lets the app's service principal run SQL on the warehouse (the id is the one in the HTTP path above).
+        - name: sql-warehouse
+          sql_warehouse:
+            id: cf3342f06e805a5e
+            permission: CAN_USE
+        # TODO: add the four secrets the env block reads, from a secret scope you own, then uncomment:
+        # - name: azure_tenant_id
+        #   secret: { scope: <your-scope>, key: <key>, permission: READ }
+        # - name: azure_client_id
+        #   secret: { scope: <your-scope>, key: <key>, permission: READ }
+        # - name: azure_client_secret
+        #   secret: { scope: <your-scope>, key: <key>, permission: READ }
+        # - name: auth_secret
+        #   secret: { scope: <your-scope>, key: <key>, permission: READ }
