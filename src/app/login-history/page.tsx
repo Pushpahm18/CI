@@ -42,6 +42,8 @@ const OPTIONAL_LABELS: Record<LoginHistoryOptionalColumn, string> = {
   note: "Note",
 };
 
+const HIDDEN_COLUMNS: LoginHistoryOptionalColumn[] = ["device", "ipAddress", "note"];
+
 function Tile({ value, label }: { value: string; label: string }) {
   return (
     <Card className="px-3.5 py-3">
@@ -68,7 +70,8 @@ export default function LoginHistoryPage() {
   const [user, setUser] = React.useState("");
 
   const records = React.useMemo(() => history.data?.records ?? [], [history.data]);
-  const optional = React.useMemo(() => history.data?.optionalColumns ?? [], [history.data]);
+  // Device, IP address and Note are not shown on this screen (nor exported or searched). Screen only: the table and the API are unchanged.
+  const optional = React.useMemo(() => (history.data?.optionalColumns ?? []).filter((k) => !HIDDEN_COLUMNS.includes(k)), [history.data]);
   const all = history.data?.scope !== "own";
   const hasEvent = optional.includes("event");
   const hasResult = optional.includes("result");

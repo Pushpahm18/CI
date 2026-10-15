@@ -125,6 +125,12 @@ export function buildDependentDeactivateStatement(table: string, i: { id: string
   return `UPDATE ${qTable(table)} SET ${qCol(C.active)} = FALSE, ${qCol(C.modifiedBy)} = ${sqlLiteral(i.actor)}, ${qCol(C.modifiedOn)} = ${sqlLiteral(tsLiteral(i.now))} WHERE ${qCol(C.id)} = ${sqlLiteral(i.id)}`;
 }
 
+/** One UPDATE that sets the active flag of many rows at once (atomic: all or none). Used for the cascade when an independent value is deactivated, and to undo it. */
+export function buildDependentSetActiveManyStatement(table: string, i: { ids: string[]; active: boolean; actor: string; now: string }): string {
+  const ids = i.ids.map((id) => sqlLiteral(id)).join(", ");
+  return `UPDATE ${qTable(table)} SET ${qCol(C.active)} = ${i.active ? "TRUE" : "FALSE"}, ${qCol(C.modifiedBy)} = ${sqlLiteral(i.actor)}, ${qCol(C.modifiedOn)} = ${sqlLiteral(tsLiteral(i.now))} WHERE ${qCol(C.id)} IN (${ids})`;
+}
+
 /** One UPDATE for a group: position i+1 for the i-th id, only rows with those ids. */
 export function buildDependentReorderStatement(table: string, i: { orderedIds: string[]; actor: string; now: string }): string {
   const cases = i.orderedIds.map((id, n) => `WHEN ${sqlLiteral(id)} THEN ${n + 1}`).join(" ");
@@ -148,6 +154,8 @@ export interface DependentLookupStore {
   insertMany(inputs: Omit<DependentInsert, "id" | "now">[]): Promise<string[]>;
   setValue(id: string, column: DependentValueColumn, value: string, actor: string): Promise<void>;
   deactivate(id: string, actor: string): Promise<void>;
+  /** Sets many rows inactive (or active again, to undo) with ONE statement. */
+  setActiveMany(ids: string[], active: boolean, actor: string): Promise<void>;
   reorder(orderedIds: string[], actor: string): Promise<void>;
 }
 
@@ -186,6 +194,9 @@ export function createDependentLookupStore(table: string, overrides: Partial<Dep
     },
     setValue: (id, column, value, actor) => write(buildDependentSetStatement(table, { id, column, value, actor, now: deps.now() })),
     deactivate: (id, actor) => write(buildDependentDeactivateStatement(table, { id, actor, now: deps.now() })),
+    async setActiveMany(ids, active, actor) {
+      if (ids.length > 0) await write(buildDependentSetActiveManyStatement(table, { ids, active, actor, now: deps.now() }));
+    },
     async reorder(orderedIds, actor) {
       if (orderedIds.length > 0) await write(buildDependentReorderStatement(table, { orderedIds, actor, now: deps.now() }));
     },

@@ -44,6 +44,10 @@ export const LOOKUP_CATEGORIES = [
   "Fab Region",
 ] as const;
 
+/** Independent lists whose deactivation also deactivates dependent mappings, so it needs a confirmation that shows the impact. */
+export const CASCADING_CATEGORIES = ["Customer", "Served Market", "Top Competitor", "Fab Region"] as const;
+export const isCascadingCategory = (category: string) => (CASCADING_CATEGORIES as readonly string[]).includes(category);
+
 // Labels and filter types follow the updated CI Prototype grid (BRD 1.1 field names).
 export const FIELDS: FieldSpec[] = [
   { key: "quarter", label: "Quarter", input: "select", mandatory: true, filter: "select", lookupCategory: "Quarter" },

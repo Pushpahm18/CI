@@ -86,6 +86,7 @@ export default function AllCompetitiveInfoPage() {
   }, []);
   const [message, setMessage] = React.useState<StatusMessage | null>(null);
 
+  const formOpen = form || editing !== null;
   const data = gallery.data;
   const rows = React.useMemo(() => data?.rows ?? [], [data]);
   const columns = React.useMemo(() => (data ? buildColumns(data) : []), [data]);
@@ -137,12 +138,25 @@ export default function AllCompetitiveInfoPage() {
 
   return (
     <RoleGuard roles={["Sales", "CM"]}>
-      <PageHeader
-        eyebrow="7.1"
-        title="All Competitive Info View"
-        description="Competitive wins, losses and pricing by customer, fab and technology node."
-      />
+      {formOpen ? (
+        <PageHeader
+          title={editing ? `Edit ${editing.record.recordId}` : "Add New"}
+          description={
+            editing
+              ? "Change this row. Saving takes effect at once, is audited and notifies the customer team."
+              : "Add a competitive row. Fill every column across; saving takes effect at once and notifies the customer team."
+          }
+        />
+      ) : (
+        <PageHeader
+          eyebrow="7.1"
+          title="All Competitive Info View"
+          description="Competitive wins, losses and pricing by customer, fab and technology node."
+        />
+      )}
 
+      {/* The grid stays mounted (so its filters and page are kept) but is hidden while the Add / Edit page is open. */}
+      <div className={formOpen ? "hidden" : "contents"}>
       {message && <StatusBanner message={message} onDismiss={() => setMessage(null)} />}
       {gallery.errorMessage && <StatusBanner message={{ kind: "bad", text: gallery.errorMessage }} />}
       {oddWafers.length > 0 && (
@@ -216,6 +230,8 @@ export default function AllCompetitiveInfoPage() {
           </>
         )}
       />
+
+      </div>
 
       {form && (
         <CompetitiveForm

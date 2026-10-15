@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CiError, NotConfiguredError } from "@/server/ci/errors";
-import { GALLERY_ROW_LIMIT, buildDescribeStatement, buildSelectStatement, parseDescribe, toGalleryRow } from "@/server/ci/competitive-gallery/data";
+import { GALLERY_ROW_LIMIT, buildDescribeStatement, buildSelectStatement, newestFirstOrder, parseDescribe, toGalleryRow } from "@/server/ci/competitive-gallery/data";
 import { loadGallery, type GalleryServiceDeps } from "@/server/ci/competitive-gallery/service";
 import { assertReadOnlyStatement } from "@/server/db/read-only";
 
@@ -28,6 +28,12 @@ describe("gallery statements", () => {
     expect(() => assertReadOnlyStatement(buildDescribeStatement(TABLE))).not.toThrow();
     expect(() => assertReadOnlyStatement(buildSelectStatement(TABLE))).not.toThrow();
     expect(buildSelectStatement(TABLE)).toBe("SELECT * FROM `test_catalog`.`test_schema`.`test_table` LIMIT " + (GALLERY_ROW_LIMIT + 1));
+  });
+  it("orders newest first, stays read-only, and keeps the scope predicates", () => {
+    const order = newestFirstOrder({ modifiedOn: "m", createdOn: "c", recordId: "id" });
+    const sql = buildSelectStatement(TABLE, 10, { columns: { customer: "c_cust", segment: "c_seg", region: "c_reg" }, scope: { customers: ["A"], segments: "All", regions: "All" } }, order);
+    expect(() => assertReadOnlyStatement(sql)).not.toThrow();
+    expect(sql).toBe("SELECT * FROM `test_catalog`.`test_schema`.`test_table` WHERE `c_cust` IN ('A') ORDER BY COALESCE(`m`, CAST(`c` AS TIMESTAMP)) DESC, `id` DESC LIMIT 11");
   });
   it("parseDescribe stops at the first blank / # row", () => {
     expect(parseDescribe([{ col_name: "a", data_type: "int" }, { col_name: "" }, { col_name: "b" }])).toEqual([{ name: "a", type: "int" }]);

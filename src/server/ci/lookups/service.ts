@@ -1,16 +1,18 @@
 import type { SessionIdentity } from "@/server/ci/current-user";
-import { CiError, NotFoundError, ValidationError } from "@/server/ci/errors";
+import { CiError, ConflictError, NotFoundError, ValidationError } from "@/server/ci/errors";
 import { getCiRepository, type CiRepository } from "@/server/ci/repository";
 import { STANDALONE_REQUIRES, requireTablesConfigured } from "@/server/ci/readiness";
 import { authorizeCorporateMarketing } from "@/server/ci/authorization/ci-access";
 import { requireConnected } from "@/server/ci/connection";
 import { authorizedReads } from "@/server/ci/authorized-reads";
 import { getLookupStore, type LookupStore, type LookupUsage } from "@/server/ci/databricks/lookups";
-import { LOOKUP_CATEGORIES } from "@/lib/ci/field-spec";
-import { ENTITY_LOOKUP, auditAfterChange, change, writeAuditHistory, type AuditWriter } from "@/server/ci/audit";
+import { getDependentLookupStore, type DependentLookupRow, type DependentLookupStore } from "@/server/ci/databricks/dependent-lookups";
+import { dependentImpactOf } from "@/server/ci/lookups/deactivation-impact";
+import { LOOKUP_CATEGORIES, isCascadingCategory } from "@/lib/ci/field-spec";
+import { ENTITY_DEPENDENT_LOOKUP, ENTITY_LOOKUP, auditAfterChange, change, writeAuditHistory, type AuditWriter } from "@/server/ci/audit";
 import type { AuditInput } from "@/server/ci/databricks/audit-history";
 import type { LookupValue } from "@/types/ci";
-import type { LookupsResponse } from "@/types/ci-api";
+import type { LookupDeactivationImpact, LookupsResponse } from "@/types/ci-api";
 
 /**
  * The Lookups API on ci_lookup (dropdown values and their Sequential Dropdown
@@ -23,7 +25,8 @@ import type { LookupsResponse } from "@/types/ci-api";
  * local development login. It deliberately does not depend on the CI users
  * table, which is not connected yet. Account Team gets no access.
  *
- * Nothing here deletes: removing a value only sets it inactive.
+ * Nothing here deletes: removing a value only sets it inactive. Removing a Customer, Served Market, Top Competitor or Fab Region
+ * also deactivates the dependent mappings that reference it, after an explicit confirmation (see deactivation-impact.ts).
  */
 
 export interface LookupsServiceDeps {
@@ -32,6 +35,8 @@ export interface LookupsServiceDeps {
   authorize(identity: SessionIdentity): Promise<{ userName: string; email?: string }>;
   repository(): Pick<CiRepository, "listLookups" | "addLookup" | "addLookups" | "renameLookup" | "deactivateLookup" | "reorderLookups">;
   usage(): Promise<LookupUsage>;
+  /** The dependent lookups (ci_lookup_dependent), needed to deactivate Customer / Served Market / Top Competitor / Fab Region. */
+  dependents?(): Pick<DependentLookupStore, "list" | "setActiveMany"> | null;
   /** Writes the audit history entries (corp_marketing_dev.audit.ci_audit_history). */
   audit: AuditWriter;
 }
@@ -42,6 +47,7 @@ const defaultDeps: LookupsServiceDeps = {
   authorize: (identity) => authorizeCorporateMarketing(identity),
   repository: getCiRepository,
   usage: async () => (getLookupStore() as LookupStore | null)?.usage() ?? { counts: {}, categories: [] },
+  dependents: () => getDependentLookupStore(),
   audit: writeAuditHistory,
 };
 
@@ -193,16 +199,131 @@ export async function renameLookupValue(identity: SessionIdentity, id: string, b
   }, "saved");
 }
 
-/** CI Prototype: removing a value keeps it on existing rows; it only stops appearing in new dropdowns. */
-export async function removeLookupValue(identity: SessionIdentity, id: string, deps: LookupsServiceDeps = defaultDeps): Promise<void> {
+function dependentStore(deps: LookupsServiceDeps) {
+  const store = deps.dependents?.();
+  if (!store) throw new CiError("The dependent lists are not available, so this value cannot be deactivated safely.", 503, "NOT_CONFIGURED");
+  return store;
+}
+
+/** Read-only: what deactivating this value would also deactivate. Customer, Served Market, Top Competitor and Fab Region only; for any other list nothing is affected. */
+export async function previewLookupRemoval(identity: SessionIdentity, id: string, deps: LookupsServiceDeps = defaultDeps): Promise<LookupDeactivationImpact> {
+  const [, all] = await authorizedList(identity, deps);
+  if (typeof id !== "string" || !ID_RE.test(id)) throw new ValidationError(["Invalid value id."]);
+  return safely(async () => {
+    const current = all.find((l) => l.id === id && l.active);
+    if (!current) throw new NotFoundError("That value was not found.");
+    if (!isCascadingCategory(current.category)) return dependentImpactOf(current.category, current.value, []).summary;
+    return dependentImpactOf(current.category, current.value, await dependentStore(deps).list()).summary;
+  }, "loaded");
+}
+
+/** One audit entry for a dependent mapping that was switched off together with its parent value. */
+function cascadeAudit(who: Actor, r: DependentLookupRow, note: string, at: string): AuditInput {
+  return {
+    entity: ENTITY_DEPENDENT_LOOKUP,
+    recordId: r.id,
+    action: "Deactivated",
+    changes: [change("Active", "true", "false")],
+    note: `${r.childType}: ${[r.parentValue1, r.parentValue2, r.childValue].filter(Boolean).join(" · ")}; ${note}`,
+    actionByName: who.userName,
+    actionByEmail: who.email,
+    at,
+  };
+}
+
+/**
+ * CI Prototype: removing a value keeps it on existing rows; it only stops appearing in new dropdowns. Soft deactivation only
+ * (is_active = FALSE): no row of ci_lookup, ci_lookup_dependent or ci_main is ever deleted or rewritten.
+ *
+ * Customer, Served Market, Top Competitor and Fab Region also switch off their dependent mappings, and need `confirmedImpact`,
+ * the fingerprint of the impact the person reviewed:
+ *   1. No fingerprint -> 409, nothing changes.
+ *   2. The dependents are read again NOW; if they are not the rows that were reviewed -> 409, nothing changes (the person
+ *      reviews the new impact and confirms again).
+ *   3. The mappings are deactivated in ONE statement (all or none), then the value itself.
+ *   4. The two tables cannot share a transaction here (the SQL Statement API runs one statement at a time and the write guards
+ *      refuse anything else), so if the second write fails the mappings are switched back on (compensation). If THAT also
+ *      fails the error says so, the ids are logged and audited, and a retry is safe: it finds the value still active and
+ *      the mappings already off, and completes the deactivation.
+ *   5. After the value is off, the dependents are read once more; a mapping added in the meantime is switched off too, so no
+ *      active mapping is left under an inactive value.
+ */
+export async function removeLookupValue(identity: SessionIdentity, id: string, deps: LookupsServiceDeps = defaultDeps, options: { confirmedImpact?: string } = {}): Promise<void> {
   const [who, all] = await authorizedList(identity, deps);
   const actor = who.userName;
   if (typeof id !== "string" || !ID_RE.test(id)) throw new ValidationError(["Invalid value id."]);
   return safely(async () => {
     const current = all.find((l) => l.id === id && l.active);
     if (!current) throw new NotFoundError("That value was not found.");
-    await deps.repository().deactivateLookup(id, actor);
-    await auditAfterChange(deps.audit, [lookupAudit(who, id, "Deactivated", [change("Active", "true", "false")], `List: ${current.category}; Value: ${current.value}`, new Date().toISOString())]);
+    const cascade = isCascadingCategory(current.category);
+    if (cascade && !options.confirmedImpact) {
+      throw new ConflictError(`Deactivating “${current.value}” needs confirmation, because it also affects its dependent mappings. Review the impact and confirm.`);
+    }
+    const dependents = cascade ? dependentStore(deps) : null;
+    // Re-read at confirmation time: what is deactivated is exactly what the person reviewed, or nothing is.
+    const impact = dependents ? dependentImpactOf(current.category, current.value, await dependents.list()) : null;
+    if (impact && impact.summary.fingerprint !== options.confirmedImpact) {
+      throw new ConflictError(
+        `The dependent mappings of “${current.value}” changed since you reviewed them (now ${impact.summary.total}). Nothing was deactivated. Review the updated impact and confirm again.`
+      );
+    }
+    const ids = impact ? impact.rows.map((r) => r.id) : [];
+    if (dependents && ids.length > 0) await dependents.setActiveMany(ids, false, actor); // one statement: all or none
+
+    try {
+      await deps.repository().deactivateLookup(id, actor);
+    } catch (error) {
+      if (dependents && ids.length > 0) {
+        try {
+          await dependents.setActiveMany(ids, true, actor);
+        } catch (undoError) {
+          console.error(
+            `[CI] lookups: “${current.value}” (${id}) could not be deactivated AND its mappings could not be switched back on. Mapping ids still inactive: ${ids.join(", ")}.`,
+            undoError instanceof Error ? undoError.message : undoError
+          );
+          // Leave a trace of the state the data was left in; if even this fails the server log above has the ids.
+          const note = `deactivated, but ${current.category} “${current.value}” was NOT deactivated and switching this back on failed; retry the deactivation or re-activate it`;
+          await deps
+            .audit((impact?.rows ?? []).map((r) => cascadeAudit(who, r, note, new Date().toISOString())))
+            .catch((auditError) => console.error("[CI] lookups: the rollback failure could not be audited:", auditError instanceof Error ? auditError.message : auditError));
+          throw new CiError(
+            `“${current.value}” was not deactivated, but ${ids.length} of its dependent mapping(s) were switched off and could not be switched back on. Retry the deactivation to finish it (it is safe to repeat), or contact support. Details are in the server log.`,
+            502,
+            "INTERNAL"
+          );
+        }
+      }
+      throw error;
+    }
+
+    // A mapping added after the re-read above would now be active under an inactive value: switch it off too.
+    let late: DependentLookupRow[] = [];
+    let sweepFailed = false;
+    if (dependents) {
+      try {
+        late = dependentImpactOf(current.category, current.value, await dependents.list()).rows;
+        if (late.length > 0) await dependents.setActiveMany(late.map((r) => r.id), false, actor);
+      } catch (error) {
+        sweepFailed = true;
+        late = [];
+        console.error(`[CI] lookups: “${current.value}” was deactivated but the check for newly added mappings failed:`, error instanceof Error ? error.message : error);
+      }
+    }
+
+    const at = new Date().toISOString();
+    const total = ids.length + late.length;
+    await auditAfterChange(deps.audit, [
+      lookupAudit(who, id, "Deactivated", [change("Active", "true", "false")], `List: ${current.category}; Value: ${current.value}${total ? `; Also deactivated ${total} dependent mapping(s)` : ""}`, at),
+      ...(impact?.rows ?? []).map((r) => cascadeAudit(who, r, `deactivated because ${current.category} “${current.value}” was deactivated`, at)),
+      ...late.map((r) => cascadeAudit(who, r, `added while ${current.category} “${current.value}” was being deactivated; deactivated with it`, at)),
+    ]);
+    if (sweepFailed) {
+      throw new CiError(
+        `“${current.value}” and its dependent mappings were deactivated, but the final check for mappings added at the same moment failed. Open the dependent lists and confirm nothing active remains under “${current.value}”. Details are in the server log.`,
+        502,
+        "INTERNAL"
+      );
+    }
   }, "saved");
 }
 

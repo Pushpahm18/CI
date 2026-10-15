@@ -1,6 +1,7 @@
 import type { SessionIdentity } from "@/server/ci/current-user";
 import { CiError, ForbiddenError, NotConfiguredError } from "@/server/ci/errors";
-import { GALLERY_ROW_LIMIT, buildDescribeStatement, buildSelectStatement, parseDescribe, toGalleryRow, type ScopeColumns } from "@/server/ci/competitive-gallery/data";
+import { GALLERY_ROW_LIMIT, buildDescribeStatement, buildSelectStatement, newestFirstOrder, parseDescribe, toGalleryRow, type ScopeColumns } from "@/server/ci/competitive-gallery/data";
+import { MAIN_COLUMNS } from "@/server/db/main-columns";
 import { authorizeCiUser, type CiGrant } from "@/server/ci/authorization/ci-access";
 import { rowInAccountScope } from "@/server/ci/authorization/scope";
 import { requireConnected } from "@/server/ci/connection";
@@ -59,7 +60,10 @@ export async function loadGallery(identity: SessionIdentity, deps: GalleryServic
     if (scope && !needed.every((c) => columns.some((col) => col.name === c))) {
       throw new ForbiddenError("Your scope cannot be applied to this table, so no rows are shown.");
     }
-    const raw = await deps.query(buildSelectStatement(table, GALLERY_ROW_LIMIT, scope ? { columns: sc, scope } : undefined));
+    // Newest first, so the 5000-row limit keeps the most recent rows and the grid opens with them on top.
+    const canOrder = [MAIN_COLUMNS.modifiedOn, MAIN_COLUMNS.createdOn, MAIN_COLUMNS.recordId].every((n) => columns.some((c) => c.name === n));
+    const order = canOrder ? newestFirstOrder(MAIN_COLUMNS) : undefined;
+    const raw = await deps.query(buildSelectStatement(table, GALLERY_ROW_LIMIT, scope ? { columns: sc, scope } : undefined, order));
     const truncated = raw.length > GALLERY_ROW_LIMIT;
     const visible = scope
       ? raw.filter((r) => rowInAccountScope(scope, { customer: String(r[sc.customer] ?? ""), segment: String(r[sc.segment] ?? ""), region: String(r[sc.region] ?? "") }))

@@ -301,3 +301,14 @@ export interface GalleryResponse {
   truncated: boolean;
   rowLimit: number;
 }
+
+/** What deactivating an independent dropdown value (Customer, Served Market, Top Competitor, Fab Region) also deactivates. */
+export interface LookupDeactivationImpact {
+  category: string;
+  value: string;
+  /** Active dependent mappings that will be deactivated with the value. */
+  total: number;
+  /** Identifies exactly these rows; sent back with the confirmation so the server can tell if they changed since the review. */
+  fingerprint: string;
+  groups: { label: string; count: number; /** The first few, for the confirmation (count is the full number). */ names: string[] }[];
+}

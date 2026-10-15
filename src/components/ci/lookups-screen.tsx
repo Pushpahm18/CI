@@ -11,11 +11,12 @@ import { NotConnectedState } from "@/components/ci/not-connected";
 import { StatusBanner, type StatusMessage } from "@/components/ci/status-banner";
 import { useCiData } from "@/hooks/use-ci-data";
 import { ApiError, ciApi } from "@/lib/ci/api";
-import { LOOKUP_CATEGORIES } from "@/lib/ci/field-spec";
+import { LOOKUP_CATEGORIES, isCascadingCategory } from "@/lib/ci/field-spec";
 import { findSheet, readWorkbook } from "@/lib/ci/import/file-reader";
 import { downloadXlsx, type XlsxSheet } from "@/lib/xlsx";
 import { cn } from "@/lib/utils";
-import type { DependentAddRequest, DependentEntryDto } from "@/types/ci-api";
+import type { DependentAddRequest, DependentEntryDto, LookupDeactivationImpact } from "@/types/ci-api";
+import type { LookupValue } from "@/types/ci";
 
 /*
  * Lookups — the layout of the approved prototype (Draft_Version1):
@@ -225,6 +226,20 @@ function ValueRow({
   );
 }
 
+/** "." -> ".." -> "..." repeating, so a waiting message visibly keeps working. */
+function AnimatedDots() {
+  const [n, setN] = React.useState(1);
+  React.useEffect(() => {
+    const t = setInterval(() => setN((v) => (v % 3) + 1), 400);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span aria-hidden="true" className="inline-block w-[1.2em] text-left">
+      {".".repeat(n)}
+    </span>
+  );
+}
+
 export function LookupsScreen() {
   const lookupData = useCiData(() => ciApi.listLookups());
   const dependent = useCiData(() => ciApi.dependentLists());
@@ -236,7 +251,14 @@ export function LookupsScreen() {
   const [customerFilter, setCustomerFilter] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState<StatusMessage | null>(null);
-  const [confirm, setConfirm] = React.useState<{ label: string; run: () => void } | null>(null);
+  // `impact` is set only for Customer / Served Market / Top Competitor / Fab Region: it is loaded from the server before the dialog can be confirmed.
+  const [confirm, setConfirm] = React.useState<{
+    label: string;
+    run: () => void;
+    cascade?: { state: "loading" } | { state: "error"; message: string } | { state: "ready"; impact: LookupDeactivationImpact };
+    /** Shown above the impact, e.g. when the mappings changed after the person first reviewed them. */
+    notice?: string;
+  } | null>(null);
   const [newParent, setNewParent] = React.useState<{ name: string; market: string; err: string } | null>(null);
   const [importing, setImporting] = React.useState(false);
 
@@ -286,7 +308,7 @@ export function LookupsScreen() {
    * Runs one change. As soon as the server confirms it, `apply` updates the list on screen (no waiting, no "Loading…"),
    * and the fresh data is fetched quietly in the background to settle anything the server decided differently.
    */
-  async function run<R>(action: () => Promise<R>, okText?: string, apply?: (result: R) => void, which: "lookups" | "dependent" = "lookups") {
+  async function run<R>(action: () => Promise<R>, okText?: string, apply?: (result: R) => void, which: "lookups" | "dependent" = "lookups", opts: { alsoDependent?: boolean; onError?: (e: unknown) => boolean } = {}) {
     setBusy(true);
     setMessage(null);
     try {
@@ -294,11 +316,44 @@ export function LookupsScreen() {
       apply?.(result);
       if (okText) setMessage({ kind: "ok", text: okText });
       void (which === "lookups" ? lookupData.refresh() : dependent.refresh());
+      // A cascading deactivation also changed the dependent lists.
+      if (opts.alsoDependent) void dependent.refresh();
     } catch (e) {
+      if (opts.onError?.(e)) return; // handled by the caller (for example: the impact changed, so the dialog is shown again)
       setMessage({ kind: "bad", text: e instanceof ApiError && e.details.length ? e.details.join(" ") : e instanceof Error ? e.message : "Failed." });
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * Remove on a dropdown value. Customer, Served Market, Top Competitor and Fab Region first load what depends on the value and
+   * only change anything when the person confirms; the server re-checks that the mappings are still the ones shown, and if
+   * they are not (someone else changed them) nothing is deactivated and the dialog reopens with the new impact.
+   */
+  function startRemoval(l: LookupValue, notice?: string) {
+    const cascading = isCascadingCategory(l.category);
+    const finish = (confirmedImpact?: string) =>
+      void run(
+        () => ciApi.removeLookup(l.id, confirmedImpact),
+        cascading ? `Deactivated “${l.value}” and its dependent mappings. Existing rows keep it.` : `Removed “${l.value}”. Existing rows keep it.`,
+        () => lookupData.mutate((d) => ({ ...d, lookups: d.lookups.map((x) => (x.id === l.id ? { ...x, active: false } : x)) })),
+        "lookups",
+        {
+          alsoDependent: cascading,
+          onError: (e) => {
+            if (!cascading || !(e instanceof ApiError) || e.code !== "CONFLICT") return false;
+            startRemoval(l, "The dependent mappings changed after you opened this. Nothing was deactivated. Review the updated impact.");
+            return true;
+          },
+        }
+      );
+    if (!cascading) return setConfirm({ label: l.value, run: () => finish() });
+    setConfirm({ label: l.value, run: () => {}, cascade: { state: "loading" }, notice });
+    ciApi.lookupRemovalImpact(l.id).then(
+      (impact) => setConfirm((c) => (c?.label === l.value ? { ...c, run: () => finish(impact.fingerprint), cascade: { state: "ready", impact } } : c)),
+      (e) => setConfirm((c) => (c?.label === l.value ? { ...c, cascade: { state: "error", message: e instanceof Error ? e.message : "The impact could not be checked." } } : c))
+    );
   }
 
   function addDropdown() {
@@ -523,17 +578,7 @@ export function LookupsScreen() {
                         () => lookupData.mutate((d) => ({ ...d, lookups: d.lookups.map((x) => (x.id === l.id ? { ...x, value: v } : x)) }))
                       )
                     }
-                    onRemove={() =>
-                      setConfirm({
-                        label: l.value,
-                        run: () =>
-                          void run(
-                            () => ciApi.removeLookup(l.id),
-                            `Removed “${l.value}”. Existing rows keep it.`,
-                            () => lookupData.mutate((d) => ({ ...d, lookups: d.lookups.map((x) => (x.id === l.id ? { ...x, active: false } : x)) }))
-                          ),
-                      })
-                    }
+                    onRemove={() => startRemoval(l)}
                   />
                 ))
               )}
@@ -699,12 +744,53 @@ export function LookupsScreen() {
 
       <Dialog open={confirm !== null} onOpenChange={(o) => !o && setConfirm(null)}>
         <DialogContent>
-          <DialogHeader title="Delete value?" onClose={() => setConfirm(null)} />
+          <DialogHeader title={confirm?.cascade ? "Confirm deactivation" : "Delete value?"} onClose={() => setConfirm(null)} />
           <DialogBody className="space-y-2 text-[13px] text-foreground">
-            <p>
-              Are you sure you want to delete <b>“{confirm?.label}”</b>?
-            </p>
-            <p className="text-muted">It will stop appearing in new dropdowns. Existing rows keep their saved value.</p>
+            {confirm?.cascade ? (
+              <>
+                {confirm.notice && <p className="rounded-md border border-warning/30 bg-warning-bg p-2.5 text-warning">{confirm.notice}</p>}
+                <p className="text-[14px] text-foreground">
+                  Deactivate <b className="text-accent">“{confirm.label}”</b>?
+                </p>
+                {confirm.cascade.state === "loading" && <p className="rounded-md border border-spark-teal/30 bg-spark-teal-bg px-3 py-2 font-medium text-spark-teal">Checking which dependent mappings use it<AnimatedDots /></p>}
+                {confirm.cascade.state === "error" && (
+                  <p className="rounded-md border border-danger/30 bg-danger-bg p-2.5 text-danger">{confirm.cascade.message} Nothing was changed.</p>
+                )}
+                {confirm.cascade.state === "ready" &&
+                  (confirm.cascade.impact.total === 0 ? (
+                    <p className="rounded-md bg-accent-bg p-2.5 text-muted">No dependent mappings use it.</p>
+                  ) : (
+                    <div className="space-y-2.5 rounded-md border border-warning/30 bg-warning-bg p-3">
+                      <p className="font-semibold text-warning">
+                        This will also deactivate {confirm.cascade.impact.total} dependent mapping{confirm.cascade.impact.total === 1 ? "" : "s"}:
+                      </p>
+                      <ul className="max-h-56 space-y-2 overflow-y-auto">
+                        {confirm.cascade.impact.groups
+                          .filter((g) => g.count > 0)
+                          .map((g) => (
+                            <li key={g.label}>
+                              <div className="font-semibold text-accent">
+                                {g.count} {g.label}
+                              </div>
+                              <div className="mt-1 rounded bg-surface px-2 py-1.5 text-muted">
+                                {g.names.join("; ")}
+                                {g.count > g.names.length ? `; and ${g.count - g.names.length} more` : ""}
+                              </div>
+                            </li>
+                          ))}
+                      </ul>
+                    </div>
+                  ))}
+                <p className="text-[12px] text-muted">Nothing is deleted. The value and these mappings stop appearing in dropdowns; existing rows keep their saved values.</p>
+              </>
+            ) : (
+              <>
+                <p>
+                  Are you sure you want to delete <b>“{confirm?.label}”</b>?
+                </p>
+                <p className="text-muted">It will stop appearing in new dropdowns. Existing rows keep their saved value.</p>
+              </>
+            )}
           </DialogBody>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirm(null)} autoFocus>
@@ -716,9 +802,9 @@ export function LookupsScreen() {
                 setConfirm(null);
                 c?.run();
               }}
-              disabled={busy}
+              disabled={busy || (confirm?.cascade !== undefined && confirm.cascade.state !== "ready")}
             >
-              Delete
+              {confirm?.cascade ? "Confirm Deactivation" : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -30,6 +30,7 @@ function wire(rows: DependentLookupRow[], lookups: { category: string; value: st
     insertMany: vi.fn(async (inputs: unknown[]) => inputs.map((_, i) => `bulk-${i}`)),
     setValue: vi.fn(async () => {}),
     deactivate: vi.fn(async () => {}),
+    setActiveMany: vi.fn(async () => {}),
     reorder: vi.fn(async () => {}),
   } satisfies DependentLookupStore;
   const deps: DependentWriteServiceDeps = {

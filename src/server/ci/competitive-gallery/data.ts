@@ -33,10 +33,23 @@ export function scopePredicates(filter?: { columns: ScopeColumns; scope: Account
     : [];
 }
 
-export function buildSelectStatement(table: string, limit = GALLERY_ROW_LIMIT, filter?: { columns: ScopeColumns; scope: AccountScope }): string {
+export function buildSelectStatement(
+  table: string,
+  limit = GALLERY_ROW_LIMIT,
+  filter?: { columns: ScopeColumns; scope: AccountScope },
+  /** SQL ORDER BY expression, built from validated server constants only (see newestFirstOrder). */
+  orderBy?: string
+): string {
   const predicates = scopePredicates(filter);
   const where = predicates.length ? ` WHERE ${predicates.join(" AND ")}` : "";
-  return `SELECT * FROM ${qTable(table)}${where} LIMIT ${Math.trunc(limit) + 1}`;
+  const order = orderBy ? ` ORDER BY ${orderBy}` : "";
+  return `SELECT * FROM ${qTable(table)}${where}${order} LIMIT ${Math.trunc(limit) + 1}`;
+}
+
+/** Most recently created-or-modified first (same stamp as the Home "recent" list), ties broken by row id so the order is stable. */
+export function newestFirstOrder(columns: { modifiedOn: string; createdOn: string; recordId: string }): string {
+  const stamp = `COALESCE(${qCol(columns.modifiedOn)}, CAST(${qCol(columns.createdOn)} AS TIMESTAMP))`;
+  return `${stamp} DESC, ${qCol(columns.recordId)} DESC`;
 }
 
 /**

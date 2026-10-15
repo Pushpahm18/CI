@@ -35,7 +35,7 @@ resources:
             value: /sql/1.0/warehouses/cf3342f06e805a5e
           # TODO: replace with this app's own URL after the first deploy.
           - name: AUTH_URL
-            value: https://ci-app-dev-7474659766206100.aws.databricksapps.com
+            value: https://ci-app-dev-7474652103815005.aws.databricksapps.comgit status
           - name: AZURE_TENANT_ID
             valueFrom: azure_tenant_id
           - name: AZURE_CLIENT_ID

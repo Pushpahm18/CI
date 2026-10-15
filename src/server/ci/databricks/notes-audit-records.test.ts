@@ -165,6 +165,61 @@ describe("audit history (audit.ci_audit_history)", () => {
     expect(execute).toHaveBeenCalledTimes(1);
     expect(await store.list("Competitive Info", "r1")).toEqual([]);
   });
+
+  describe("manual entry vs bulk import (stored in the existing comments column; no table change)", () => {
+    const base = (over: Partial<AuditInput> = {}): AuditInput => ({
+      entity: "Competitive Info", recordId: "r1", action: "Created", note: "Initial entry.", actionByName: "Ann Lee", actionByEmail: "ann@corp.com", at: AT,
+      changes: [{ field: "quarter", label: "Quarter", previous: "", current: "Q1" }],
+      ...over,
+    });
+    const readBack = (rows: Record<string, unknown>[]) => rowsToEntries(rows.map((r) => ({ ...r, action_timestamp: AT })));
+
+    it("a manual entry stores the Change Note exactly as typed, with no import marker", () => {
+      const [row] = auditRows([base()], ids());
+      expect(row.comments).toBe("Initial entry.");
+      const [entry] = readBack([row]);
+      expect(entry).toMatchObject({ action: "Created", actionTakenBy: "Ann Lee", actorEmail: "ann@corp.com", note: "Initial entry." });
+      expect(entry.importType).toBeUndefined();
+      expect(entry.sourceFile).toBeUndefined();
+    });
+
+    it("an import stores its type and file in a marker line before the note, and reads them back without it", () => {
+      for (const importType of ["Historic Load", "Bulk Update", "Excel Import"] as const) {
+        const [row] = auditRows([base({ action: importType === "Bulk Update" ? "Edited" : "Imported", importType, sourceFile: "rows q3.xlsx" })], ids());
+        expect(row.comments).toBe(`[Bulk Import: ${importType} | file: rows q3.xlsx]\nInitial entry.`);
+        const [entry] = readBack([row]);
+        expect(entry).toMatchObject({ importType, sourceFile: "rows q3.xlsx", note: "Initial entry.", actionTakenBy: "Ann Lee" });
+      }
+    });
+
+    it("an import with no note or no file name still round-trips", () => {
+      const [onlyMarker] = auditRows([base({ action: "Imported", importType: "Excel Import", note: undefined, sourceFile: undefined })], ids());
+      expect(onlyMarker.comments).toBe("[Bulk Import: Excel Import]");
+      expect(readBack([onlyMarker])[0]).toMatchObject({ importType: "Excel Import", note: "" });
+      expect(readBack([onlyMarker])[0].sourceFile).toBeUndefined();
+    });
+
+    it("a hostile file name cannot break out of the marker", () => {
+      const [row] = auditRows([base({ action: "Imported", importType: "Excel Import", sourceFile: "a]\nFake note.xlsx" })], ids());
+      const [entry] = readBack([row]);
+      expect(entry.sourceFile).toBe("a Fake note.xlsx");
+      expect(entry.note).toBe("Initial entry.");
+    });
+
+    it("older entries (no marker) are untouched, including a plain Imported entry from before", () => {
+      const old = { audit_id: "o1", entity_name: "Competitive Info", record_id: "r1", action_taken: "Imported", field_name: null, old_value: null, new_value: null, comments: "Imported by Corporate Marketing (Excel).", action_by: "Ann Lee <ann@corp.com>", action_timestamp: AT };
+      const [entry] = rowsToEntries([old]);
+      expect(entry).toMatchObject({ action: "Imported", note: "Imported by Corporate Marketing (Excel)." });
+      expect(entry.importType).toBeUndefined();
+    });
+
+    it("the import marker only ever goes through the same guarded, append-only INSERT", () => {
+      const sql = buildInsertAuditStatement(AUDIT, [base({ action: "Imported", importType: "Historic Load", sourceFile: "x.xlsx" })], ids());
+      expect(() => assertAuditWriteStatement(AUDIT, sql)).not.toThrow();
+      expect(() => assertCiWriteStatement(sql)).not.toThrow();
+      expect(sql).toContain("Bulk Import: Historic Load");
+    });
+  });
 });
 
 describe("competitive rows (ci_main)", () => {
@@ -294,6 +349,10 @@ describe("repository wiring", () => {
     expect(addAudit).toHaveBeenCalledWith([
       { entity: "Competitive Info", recordId: "r1", action: "Created", changes: [{ field: "customer", label: "Customer", previous: "", current: "UMC" }], note: "why", actionByName: "Ann Lee", actionByEmail: "ann@corp.com", at: AT },
     ]);
+    // An Import's type and file reach the audit store (they are not dropped on the way).
+    addAudit.mockClear();
+    await repo.addAudit([{ recordId: "r2", action: "Imported", actionTakenBy: "Ann Lee", dateTime: AT, changes: [], note: "n", importType: "Excel Import", sourceFile: "f.xlsx" }]);
+    expect(addAudit).toHaveBeenCalledWith([expect.objectContaining({ recordId: "r2", action: "Imported", importType: "Excel Import", sourceFile: "f.xlsx" })]);
     expect((await repo.listAudit("r1"))[0].recordId).toBe("Competitive Info:r1");
     expect((await repo.listNotes("r1"))[0].recordId).toBe("r1");
     expect((await repo.createRecord(record())).recordId).toBe("new");

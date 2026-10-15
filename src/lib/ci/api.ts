@@ -7,6 +7,7 @@ import type {
   DependentListsResponse,
   FormOptionsResponse,
   ImportApiRequest,
+  LookupDeactivationImpact,
   LookupsResponse,
   OffboardPreviewResponse,
   OffboardResponse,
@@ -125,7 +126,9 @@ export const ciApi = {
   listLookups: () => request<LookupsResponse>("/api/lookups"),
   addLookup: (body: AddLookupRequest) =>
     request<{ lookup: LookupValue }>("/api/lookups", { method: "POST", body: json(body) }),
-  removeLookup: (id: string) => request<void>(`/api/lookups/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  removeLookup: (id: string, confirmedImpact?: string) =>
+    request<void>(`/api/lookups/${encodeURIComponent(id)}${confirmedImpact ? `?confirmImpact=${encodeURIComponent(confirmedImpact)}` : ""}`, { method: "DELETE" }),
+  lookupRemovalImpact: (id: string) => request<LookupDeactivationImpact>(`/api/lookups/${encodeURIComponent(id)}/impact`),
   reorderLookups: (body: ReorderLookupsRequest) =>
     request<void>("/api/lookups/order", { method: "PUT", body: json(body) }),
 

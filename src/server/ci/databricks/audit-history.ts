@@ -21,7 +21,9 @@ import { executeStatement } from "@/server/db/warehouse";
  *   action_taken      Created, Edited, Deactivated, ...
  *   field_name        the field's label ("Fab Location")
  *   old_value / new_value   NULL when there was no value
- *   comments          the Change Note text, where there is one
+ *   comments          the Change Note text, where there is one. A change made through Import starts with one marker line,
+ *                     `[Bulk Import: <type> | file: <name>]`, because the table has no column for the import type or file
+ *                     (see encodeImportSource). Older rows have no marker and read back exactly as before.
  *   action_by         "Name <email>": the verified signed-in person (the table has no separate email column)
  */
 
@@ -39,6 +41,28 @@ export interface AuditInput {
   actionByEmail?: string;
   /** ISO timestamp (the service's clock). */
   at: string;
+  /** Set when the change was made through Import (stored as a marker line at the start of comments). */
+  importType?: ImportType;
+  sourceFile?: string;
+}
+
+export type ImportType = NonNullable<AuditEntry["importType"]>;
+const IMPORT_TYPES: readonly ImportType[] = ["Historic Load", "Bulk Update", "Excel Import"];
+const MARKER = /^\[Bulk Import: (Historic Load|Bulk Update|Excel Import)(?: \| file: ([^\]\r\n]*))?\]\r?\n?/;
+
+/** The text stored in comments: the import marker line (when the change came from an Import) followed by the Change Note. */
+export function encodeImportSource(note: string | undefined, importType?: ImportType, sourceFile?: string): string | null {
+  const text = note ? note : "";
+  if (!importType || !IMPORT_TYPES.includes(importType)) return text ? text : null;
+  const file = (sourceFile ?? "").replace(/[\]\r\n]+/g, " ").trim().slice(0, 200);
+  return `[Bulk Import: ${importType}${file ? ` | file: ${file}` : ""}]${text ? "\n" + text : ""}`;
+}
+
+/** Splits stored comments back into the Change Note and, for an Import, its type and file. */
+export function decodeImportSource(comments: string): { note: string; importType?: ImportType; sourceFile?: string } {
+  const m = comments.match(MARKER);
+  if (!m) return { note: comments };
+  return { note: comments.slice(m[0].length), importType: m[1] as ImportType, sourceFile: m[2]?.trim() || undefined };
 }
 
 /** "Ann Lee <ann@corp.com>"; just the name when no email is known. */
@@ -70,7 +94,7 @@ export function auditRows(inputs: AuditInput[], newId: () => string): Record<str
         [C.field]: change ? change.label : null,
         [C.oldValue]: change ? orNull(change.previous) : null,
         [C.newValue]: change ? orNull(change.current) : null,
-        [C.comments]: input.note ? input.note : null,
+        [C.comments]: encodeImportSource(input.note, input.importType, input.sourceFile),
         [C.actionBy]: by,
         [C.actionTimestamp]: tsLiteral(input.at),
         [C.createdBy]: by,
@@ -116,6 +140,7 @@ export function rowsToEntries(rows: Record<string, unknown>[]): AuditEntry[] {
     let entry = entries.get(key);
     if (!entry) {
       const who = parseActionBy(by);
+      const source = decodeImportSource(str(row[C.comments]));
       entry = {
         id: str(row[C.id]),
         recordId: str(row[C.recordId]),
@@ -124,7 +149,8 @@ export function rowsToEntries(rows: Record<string, unknown>[]): AuditEntry[] {
         actorEmail: who.email || undefined,
         dateTime: at,
         changes: [],
-        note: str(row[C.comments]),
+        note: source.note,
+        ...(source.importType ? { importType: source.importType, sourceFile: source.sourceFile } : {}),
       };
       entries.set(key, entry);
     }

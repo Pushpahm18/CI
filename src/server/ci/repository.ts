@@ -222,6 +222,8 @@ export function composeRepository(base: CiRepository, lookups: LookupStore | nul
             actionByName: e.actionTakenBy,
             actionByEmail: e.actorEmail,
             at: e.dateTime,
+            importType: e.importType,
+            sourceFile: e.sourceFile,
           }))
         ),
     };
