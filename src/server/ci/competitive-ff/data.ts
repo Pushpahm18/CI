@@ -29,6 +29,7 @@ export function rowToFlatDisplayRecord(row: Record<string, unknown>): Competitiv
   const asNumberField = (v: unknown) => text(v) as unknown as number;
   return {
     recordId: text(row[M.recordId]),
+    applicationId: text(row[M.applicationId]) || undefined,
     quarter: text(row[M.quarter]),
     year: text(row[M.year]),
     customer: text(row[M.customer]),
@@ -63,6 +64,7 @@ export function rowToFlatRecord(row: Record<string, unknown>): CompetitiveRecord
   const M = MAIN_COLUMNS;
   return {
     recordId: str(row[M.recordId]),
+    applicationId: str(row[M.applicationId]) || undefined,
     quarter: str(row[M.quarter]),
     year: str(row[M.year]),
     customer: str(row[M.customer]),

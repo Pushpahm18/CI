@@ -8,7 +8,7 @@ import { loadFlatFile, type FlatFileDeps } from "@/server/ci/competitive-ff/serv
 
 const id = { email: "cm@example.com", name: "CM" };
 const raw = {
-  ci_id: "e7d9", quarter: "Q2", year: "2026", customer: "Samsung", fab_location: "Samsung Austin", fab_region: "KOR", served_market: "Foundry",
+  ci_id: "e7d9", application_id: "CI-0042", quarter: "Q2", year: "2026", customer: "Samsung", fab_location: "Samsung Austin", fab_region: "KOR", served_market: "Foundry",
   technology_node: "L14", wafer_size_mm: "300.0", process_application: "Isolation", process_type: "Sacrificial - Conformal", process_location: "Channel",
   films: null, product_line: "PEALD", top_competitor: "Wonik IPS", product_name: "Batch ALD", process_modules: "1", order_type: "Tool",
   actual_order: "6.0", asp_million: "4.71", currency: "USD", revenue_sales_currency: "28.259999999999998", tool_type: "Y2O3-DCM",
@@ -21,6 +21,7 @@ describe("Competitive FF data", () => {
     expect(() => assertReadOnlyStatement(sql)).not.toThrow();
     expect(sql).toContain("`ci_id`");
     expect(sql).toContain("`revenue_sales_currency`");
+    expect(sql).toContain("`application_id`");
     expect(sql).toContain("WHERE `is_active` = TRUE");
     expect(sql).toContain("ORDER BY `created_date` DESC");
     expect(sql).toMatch(new RegExp(`LIMIT ${FLAT_FILE_ROW_LIMIT + 1}$`));
@@ -28,7 +29,7 @@ describe("Competitive FF data", () => {
 
   it("maps a row: numbers are numbers, blanks are empty, the wafer size shows its approved label", () => {
     const r = rowToFlatRecord(raw);
-    expect(r).toMatchObject({ recordId: "e7d9", year: "2026", customer: "Samsung", fabRegion: "KOR", waferSize: '300mm (12")', films: "", actualOrder: 6, asp: 4.71, currency: "USD", createdBy: "M. Tanaka", createdOn: "2026-04-02" });
+    expect(r).toMatchObject({ recordId: "e7d9", applicationId: "CI-0042", year: "2026", customer: "Samsung", fabRegion: "KOR", waferSize: '300mm (12")', films: "", actualOrder: 6, asp: 4.71, currency: "USD", createdBy: "M. Tanaka", createdOn: "2026-04-02" });
     expect(r.revenue).toBeCloseTo(28.26, 5);
     expect(r.modifiedBy).toBeUndefined();
   });
@@ -88,6 +89,12 @@ describe("loadFlatFile", () => {
     const res = await loadFlatFile(id, make());
     expect(res.records).toHaveLength(1);
     expect(res.truncated).toBe(false);
+    expect(res.records[0].applicationId).toBe("CI-0042");
+  });
+
+  it("the import shape carries the Application ID, the approved wafer label and numbers as numbers", async () => {
+    const res = await loadFlatFile(id, make(), "import");
+    expect(res.records[0]).toMatchObject({ applicationId: "CI-0042", waferSize: '300mm (12")', actualOrder: 6, asp: 4.71 });
   });
 
   it("an Account Team (or any refused) caller gets the refusal and no rows, even though the read started alongside", async () => {

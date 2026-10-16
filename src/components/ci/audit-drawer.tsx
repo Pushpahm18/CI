@@ -85,9 +85,10 @@ function Entry({ entry, isLast }: { entry: AuditEntry; isLast: boolean }) {
         {source?.detail && <p className="mt-0.5 text-[12px] text-muted">Source: {source.detail}</p>}
         {entry.changes.length > 0 && <FieldChanges entry={entry} />}
         {entry.note && (
-          <p className="mt-2 whitespace-pre-line rounded-r-md border-l-4 border-accent bg-accent-bg-strong px-3 py-2 text-[12.5px] font-medium text-foreground">
-            {entry.note}
-          </p>
+          <div className="mt-2 rounded-r-md border-l-4 border-accent bg-accent-bg-strong px-3 py-2 text-foreground">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Change Note</p>
+            <p className="mt-0.5 whitespace-pre-line text-[12.5px] font-medium">{entry.note}</p>
+          </div>
         )}
       </div>
     </div>

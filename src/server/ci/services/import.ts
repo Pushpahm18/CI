@@ -1,12 +1,12 @@
 import type { AuditEntry, ChangeNote, CiUser, CompetitiveRecord } from "@/types/ci";
 import { getCiRepository } from "@/server/ci/repository";
 import { requireRole } from "@/server/ci/current-user";
-import { ValidationError } from "@/server/ci/errors";
+import { CiError, ValidationError } from "@/server/ci/errors";
 import { importRecipients, notify } from "@/server/ci/notifications";
 import { diffRecords } from "@/lib/ci/rules";
 import { buildHistoricPreview } from "@/lib/ci/import/historic";
 import { buildBulkPreview } from "@/lib/ci/import/bulk";
-import { buildExcelRowsPreview } from "@/lib/ci/import/add-rows";
+import { applicationIdKey, applicationIdOf, buildExcelRowsPreview } from "@/lib/ci/import/add-rows";
 import { RECORD_ID_LABEL } from "@/lib/ci/field-spec";
 import { headerIndex } from "@/lib/ci/import/parse-values";
 import type {
@@ -174,55 +174,125 @@ export async function commitBulk(user: CiUser, sheetInput: unknown, changeNote: 
   };
 }
 
-// ---------------------------------------------------------------- add rows from Excel
+// ---------------------------------------------------------------- add / update rows from Excel
 
 /** CI Prototype Import: the first Change Note of every row added from an Excel file. */
 const EXCEL_IMPORT_NOTE = "Imported by Corporate Marketing (Excel).";
+/** ...and of every existing row an Excel file changes. */
+const EXCEL_UPDATE_NOTE = "Updated by Corporate Marketing through Excel import.";
+
+/** Rows one Excel import may carry: every row is audited field by field, and each lands in Databricks, so very large files belong in smaller parts. */
+export const MAX_EXCEL_ROWS = 1000;
+/** Notes / audit entries written per statement. */
+const ENTRY_GROUP_SIZE = 100;
+
+async function excelPreviewFor(user: CiUser, sheetInput: unknown): Promise<{ preview: ExcelRowsPreview; existing: Map<string, CompetitiveRecord> }> {
+  const sheet = sanitiseSheet(sheetInput);
+  if (sheet.rows.length > MAX_EXCEL_ROWS) {
+    throw new ValidationError([`The file has ${sheet.rows.length} rows; the maximum per Excel import is ${MAX_EXCEL_ROWS}. Split the file and import it in parts.`]);
+  }
+  const ids = Array.from(new Set(sheet.rows.map((r) => applicationIdOf(sheet.headers, r)).filter(Boolean)));
+  const repo = getCiRepository();
+  const [options, found] = await Promise.all([loadFormOptions(), ids.length ? repo.getRecordsByApplicationIds(ids) : Promise.resolve([])]);
+  const existing = new Map(found.map((r) => [applicationIdKey(r.applicationId || r.recordId), r]));
+  return { preview: buildExcelRowsPreview(sheet, { ...options, user, today: todayIso(), existing }), existing };
+}
 
 export async function previewExcelRows(user: CiUser, sheetInput: unknown): Promise<ExcelRowsPreview> {
   requireRole(user, ["CM"]);
-  return buildExcelRowsPreview(sanitiseSheet(sheetInput), { ...(await loadFormOptions()), user, today: todayIso() });
+  return (await excelPreviewFor(user, sheetInput)).preview;
 }
 
 /**
- * Adds the valid rows of the file (CI Prototype: rows with problems are listed
- * and left out). The whole validation is re-run here, so a tampered preview
- * cannot add anything the form would refuse; nothing is added when the
- * template does not match or no row is valid.
+ * Adds the new rows and updates the changed rows of the file (CI Prototype: rows with problems are listed and left out;
+ * an existing row identical to the file is counted as unchanged and not touched). The whole validation is re-run here, so a
+ * tampered preview cannot save anything the form would refuse; nothing is saved when the template does not match or no row
+ * would be added or updated. If a later step fails, the rows already written are put back (updates restored, new rows
+ * switched off) so an import is never half-saved.
  */
 export async function commitExcelRows(user: CiUser, sheetInput: unknown): Promise<ImportCommitResult> {
-  const preview = await previewExcelRows(user, sheetInput);
+  requireRole(user, ["CM"]);
+  const { preview, existing } = await excelPreviewFor(user, sheetInput);
   if (!preview.canCommit) {
     throw new ValidationError(
-      [preview.missingColumns.length ? `Missing column(s): ${preview.missingColumns.join(", ")}.` : "The file has no valid rows to add."],
-      "Nothing was added."
+      [preview.missingColumns.length ? `Missing column(s): ${preview.missingColumns.join(", ")}.` : "The file has no rows to add or update."],
+      "Nothing was imported."
     );
   }
-  const toAdd = preview.rows.filter((r) => r.status === "ready" && r.record);
+  const toAdd = preview.rows.filter((r) => r.status === "new" && r.record);
+  const toUpdate = preview.rows.filter((r) => r.status === "update" && r.updated);
   const repo = getCiRepository();
-  const created = await repo.createRecords(toAdd.map((r) => r.record!));
-
   const now = new Date().toISOString();
-  await repo.addNotes(created.map((rec) => ({ recordId: rec.recordId, actionTakenBy: user.name, dateTime: now, notes: EXCEL_IMPORT_NOTE })));
-  await repo.addAudit(
-    created.map((rec) => ({
-      recordId: rec.recordId,
-      action: "Imported" as const,
-      actionTakenBy: user.name,
-      actorEmail: user.email,
-      dateTime: now,
-      changes: diffRecords({ ...emptyRecord(), recordId: rec.recordId }, rec),
-      note: EXCEL_IMPORT_NOTE,
-      importType: "Excel Import" as const,
-      sourceFile: preview.fileName,
-    }))
+
+  const previous = toUpdate.map((r) => existing.get(applicationIdKey(r.applicationId))).filter((r): r is CompetitiveRecord => Boolean(r));
+  let created: CompetitiveRecord[] = [];
+  const rollback = async (error: unknown): Promise<never> => {
+    let restored = true;
+    try {
+      if (previous.length) await repo.updateRecords(previous);
+      for (const r of created) await repo.discardRecord(r.recordId);
+    } catch (undoError) {
+      restored = false;
+      console.error("[CI] could not undo a failed Excel import:", undoError instanceof Error ? undoError.message : undoError);
+    }
+    console.error("[CI] Excel import failed:", error instanceof Error ? error.message : error);
+    if (error instanceof CiError && restored) throw error;
+    throw new CiError(
+      restored
+        ? "The import was not saved: a step failed and the rows already written were put back. Check the server log for details."
+        : "The import was only partly saved, and the change could not be undone. Contact support; check the server log for details.",
+      502,
+      "INTERNAL"
+    );
+  };
+
+  try {
+    if (toAdd.length) created = await repo.createRecords(toAdd.map((r) => r.record!));
+    if (toUpdate.length) await repo.updateRecords(toUpdate.map((r) => ({ ...r.updated!, modifiedBy: user.name, modifiedOn: now })));
+
+    const notes: Omit<ChangeNote, "id">[] = [
+      ...created.map((rec) => ({ recordId: rec.recordId, actionTakenBy: user.name, dateTime: now, notes: EXCEL_IMPORT_NOTE })),
+      ...toUpdate.map((r) => ({ recordId: r.updated!.recordId, actionTakenBy: user.name, dateTime: now, notes: EXCEL_UPDATE_NOTE })),
+    ];
+    const audit: Omit<AuditEntry, "id">[] = [
+      ...created.map((rec) => ({
+        recordId: rec.recordId,
+        action: "Imported" as const,
+        actionTakenBy: user.name,
+        actorEmail: user.email,
+        dateTime: now,
+        changes: diffRecords({ ...emptyRecord(), recordId: rec.recordId }, rec),
+        note: EXCEL_IMPORT_NOTE,
+        importType: "Excel Import" as const,
+        sourceFile: preview.fileName,
+      })),
+      ...toUpdate.map((r) => ({
+        recordId: r.updated!.recordId,
+        action: "Edited" as const,
+        actionTakenBy: user.name,
+        actorEmail: user.email,
+        dateTime: now,
+        changes: r.changes,
+        note: EXCEL_UPDATE_NOTE,
+        importType: "Excel Import" as const,
+        sourceFile: preview.fileName,
+      })),
+    ];
+    for (let i = 0; i < notes.length; i += ENTRY_GROUP_SIZE) await repo.addNotes(notes.slice(i, i + ENTRY_GROUP_SIZE));
+    for (let i = 0; i < audit.length; i += ENTRY_GROUP_SIZE) await repo.addAudit(audit.slice(i, i + ENTRY_GROUP_SIZE));
+  } catch (error) {
+    return rollback(error);
+  }
+
+  const notification = await notify(
+    { kind: "imported", importedBy: user.name, rowCount: created.length + toUpdate.length, added: created.length, updated: toUpdate.length },
+    importRecipients(await repo.listUsers())
   );
-  const notification = await notify({ kind: "imported", importedBy: user.name, rowCount: created.length }, importRecipients(await repo.listUsers()));
   return {
     importType: "Excel Import",
     inserted: created.length,
-    updated: 0,
-    skipped: preview.summary.emptySkipped + preview.summary.invalid,
+    updated: toUpdate.length,
+    skipped: preview.summary.emptySkipped + preview.summary.invalid + preview.summary.unchanged,
     flagged: 0,
     notification,
   };

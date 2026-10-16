@@ -31,6 +31,9 @@ export interface ImportSummaryEmail {
   kind: "imported";
   importedBy: string;
   rowCount: number;
+  /** An Excel import that adds and updates rows reports both counts. */
+  added?: number;
+  updated?: number;
 }
 
 type NotificationEvent = RowChangeEmail | ImportSummaryEmail;
@@ -49,13 +52,17 @@ export function importRecipients(users: CiUser[]): CiUser[] {
 }
 
 function subject(event: NotificationEvent): string {
-  if (event.kind === "imported") return `[CI] Import completed – ${event.rowCount} rows`;
+  if (event.kind === "imported") {
+    return event.added !== undefined ? `[CI] Import completed – ${event.added} added, ${event.updated ?? 0} updated` : `[CI] Import completed – ${event.rowCount} rows`;
+  }
   return `[CI] Row ${event.recordId} ${event.kind} – ${event.customer}`;
 }
 
 function body(event: NotificationEvent): string {
   if (event.kind === "imported") {
-    return `${event.importedBy} imported ${event.rowCount} rows into Competitive Intelligence.`;
+    return event.added !== undefined
+      ? `${event.importedBy} imported ${event.added} new rows and updated ${event.updated ?? 0} existing rows in Competitive Intelligence.`
+      : `${event.importedBy} imported ${event.rowCount} rows into Competitive Intelligence.`;
   }
   const lines = event.changes.length
     ? event.changes.map((c) => `  • ${c.label}: ${c.previous || "(empty)"} → ${c.current || "(empty)"}`)

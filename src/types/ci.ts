@@ -43,6 +43,8 @@ export interface CiUser {
 /** One competitive row — the 24 fields of the CI Prototype (BRD §7.2) plus the system Record ID. */
 export interface CompetitiveRecord {
   recordId: string;
+  /** ci_main.application_id as stored (CI-0001, ...): the id people see and use in Excel imports. Absent on a row not yet saved. */
+  applicationId?: string;
   quarter: string;
   year: string;
   customer: string;

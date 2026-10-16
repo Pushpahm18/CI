@@ -26,6 +26,9 @@ import {
   buildDiscardRecordStatement,
   buildGetRecordsStatement,
   applicationIdFor,
+  buildGetByApplicationIdsStatement,
+  buildInsertRecordsStatement,
+  INSERT_GROUP_SIZE,
   buildInsertRecordStatement,
   buildMaxApplicationSeqStatement,
   buildListRecordsStatement,
@@ -379,7 +382,8 @@ describe("repository wiring", () => {
       notes: { list: async (id) => [{ id: "n", recordId: id, actionTakenBy: "A", dateTime: AT, notes: "x" }], add: addNotes },
       audit: { list: async (entity, id) => [{ id: "a", recordId: `${entity}:${id}`, action: "Edited", actionTakenBy: "A", dateTime: AT, changes: [], note: "" }], add: addAudit },
       records: {
-        listRecords: async () => [], getRecord: async () => null, getRecords: async () => [], updateRecord: async () => {},
+        listRecords: async () => [], getRecord: async () => null, getRecords: async () => [], getRecordsByApplicationIds: async () => [], updateRecord: async () => {},
+        updateRecords: async () => {}, createRecords: async (rs) => rs.map((r) => ({ ...r, recordId: "new" })),
         createRecord: async (r) => ({ ...r, recordId: "new" }), discardRecord: discard,
       },
       users: { list: async () => [raw({ email: "cm@x.com", userName: "CM" })] },
@@ -407,7 +411,90 @@ describe("repository wiring", () => {
     expect((await repo.getUser("u"))?.email).toBe("cm@x.com");
 
     // Not connected yet: still refuses.
-    await expect(repo.createRecords([])).rejects.toThrow(/not been implemented|pending/);
+    await expect(repo.reassignRecords("a", "b")).rejects.toThrow(/not been implemented|pending/);
     await expect(repo.createUser({ name: "x", email: "x@x.com", role: "Sales", customerScope: "All", segmentScope: "All", regionScope: "All", status: "Active" })).rejects.toThrow();
+  });
+});
+
+describe("Excel import: batch writes on ci_main", () => {
+  const items = (n: number) => Array.from({ length: n }, (_, i) => ({ recordId: `id${i}`, record: record(), applicationId: `CI-${String(502 + i).padStart(4, "0")}` }));
+
+  it("inserts a group of rows with consecutive Application IDs in one guarded statement that writes nothing if any of those ids is taken", () => {
+    const sql = buildInsertRecordsStatement(MAIN, items(2));
+    expect(sql).toContain("'CI-0502' AS `application_id`");
+    expect(sql).toContain("'CI-0503' AS `application_id`");
+    expect(sql).toContain("UNION ALL");
+    expect(sql).toContain("WHERE NOT EXISTS (SELECT 1 FROM `corp_marketing_dev`.`ci`.`ci_main` WHERE `application_id` IN ('CI-0502', 'CI-0503'))");
+    expect(() => assertRecordWriteStatement(MAIN, sql)).not.toThrow();
+    expect(() => assertCiWriteStatement(sql)).not.toThrow();
+    expect(() => buildInsertRecordsStatement(MAIN, [])).toThrow();
+  });
+
+  it("reads rows by Application ID, live rows only", () => {
+    const sql = buildGetByApplicationIdsStatement(MAIN, ["CI-0001", "CI-0002"]);
+    expect(sql).toContain("`is_active` = TRUE AND `application_id` IN ('CI-0001', 'CI-0002')");
+    expect(() => assertReadOnlyStatement(sql)).not.toThrow();
+  });
+
+  it("createRecords numbers rows after the current highest, returns them with their ids, and splits big imports into groups", async () => {
+    const written: string[] = [];
+    let n = 0;
+    const store = createRecordStore(MAIN, {
+      query: async (sql) => (sql.includes("maxSeq") ? [{ maxSeq: String(501 + written.length * 0) }] : [{ cnt: String(written.at(-1)?.split("UNION ALL").length ?? 0) }]),
+      execute: async (sql) => void written.push(sql),
+      newId: () => `uuid${++n}`,
+    });
+    const out = await store.createRecords([record(), record(), record()]);
+    expect(out.map((r) => r.applicationId)).toEqual(["CI-0502", "CI-0503", "CI-0504"]);
+    expect(out.map((r) => r.recordId)).toEqual(["uuid1", "uuid2", "uuid3"]);
+    expect(written).toHaveLength(1);
+
+    written.length = 0;
+    const big = Array.from({ length: INSERT_GROUP_SIZE + 1 }, () => record());
+    await store.createRecords(big);
+    expect(written).toHaveLength(2);
+  });
+
+  it("createRecords retries a group with fresh numbers when another import took them first, and switches earlier groups off if a later one fails", async () => {
+    const written: string[] = [];
+    let top = 501;
+    let landedOnce = false;
+    const store = createRecordStore(MAIN, {
+      query: async (sql) => (sql.includes("maxSeq") ? [{ maxSeq: String(top) }] : [{ cnt: landedOnce ? "1" : "0" }]),
+      execute: async (sql) => {
+        written.push(sql);
+        if (written.length === 1) top += 5; // someone else took numbers: our guarded INSERT wrote nothing
+        else landedOnce = true;
+      },
+      newId: () => `u${written.length}-${Math.random()}`,
+    });
+    const out = await store.createRecords([record()].concat([]));
+    expect(out).toHaveLength(1);
+    expect(written[0]).toContain("'CI-0502' AS `application_id`");
+    expect(written[1]).toContain("'CI-0507' AS `application_id`");
+
+    // The second group can never land: the first group is switched off again and the error is raised.
+    const calls: string[] = [];
+    let group = 0;
+    const failing = createRecordStore(MAIN, {
+      query: async (sql) => (sql.includes("maxSeq") ? [{ maxSeq: "1" }] : [{ cnt: group === 1 ? String(INSERT_GROUP_SIZE) : "0" }]),
+      execute: async (sql) => {
+        calls.push(sql);
+        if (sql.startsWith("INSERT")) group += 1;
+      },
+      newId: () => `x${calls.length}${Math.random()}`,
+    });
+    await expect(failing.createRecords(Array.from({ length: INSERT_GROUP_SIZE + 1 }, () => record()))).rejects.toThrow(/Could not get free Application IDs/);
+    expect(calls.some((c) => c.startsWith("UPDATE") && c.includes("`is_active` = FALSE"))).toBe(true);
+  });
+
+  it("updateRecords sends one guarded UPDATE per row, in order", async () => {
+    const written: string[] = [];
+    const store = createRecordStore(MAIN, { query: async () => [], execute: async (sql) => void written.push(sql), newId: () => "x" });
+    await store.updateRecords([{ ...record(), recordId: "r1" }, { ...record(), recordId: "r2" }]);
+    expect(written).toHaveLength(2);
+    expect(written[0]).toContain("`ci_id` = 'r1'");
+    expect(written[1]).toContain("`ci_id` = 'r2'");
+    written.forEach((sql) => expect(() => assertRecordWriteStatement(MAIN, sql)).not.toThrow());
   });
 });

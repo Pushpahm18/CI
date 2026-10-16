@@ -3,7 +3,7 @@ import { CiError, NotConfiguredError } from "@/server/ci/errors";
 import { authorizeCorporateMarketing } from "@/server/ci/authorization/ci-access";
 import { authorizedReads } from "@/server/ci/authorized-reads";
 import { requireConnected } from "@/server/ci/connection";
-import { FLAT_FILE_ROW_LIMIT, buildFlatFileStatement, rowToFlatDisplayRecord } from "@/server/ci/competitive-ff/data";
+import { FLAT_FILE_ROW_LIMIT, buildFlatFileStatement, rowToFlatDisplayRecord, rowToFlatRecord } from "@/server/ci/competitive-ff/data";
 import { executeReadOnlyQuery } from "@/server/db/read-only";
 import { COMPETITIVE_GALLERY_LABEL, COMPETITIVE_GALLERY_SOURCE, tableName, type TableRef } from "@/server/db/schema";
 import type { RecordsResponse } from "@/types/ci-api";
@@ -29,7 +29,14 @@ const defaultDeps: FlatFileDeps = {
   query: (statement) => executeReadOnlyQuery(statement),
 };
 
-export async function loadFlatFile(identity: SessionIdentity, deps: FlatFileDeps = defaultDeps): Promise<RecordsResponse> {
+/**
+ * "display" (the Competitive FF grid): every value as stored. "import" (the Excel import's Download existing rows): the form's own
+ * model - the approved wafer-size label, numbers as numbers - so the file can be edited and imported back.
+ */
+export type FlatFileShape = "display" | "import";
+
+export async function loadFlatFile(identity: SessionIdentity, deps: FlatFileDeps = defaultDeps, shape: FlatFileShape = "display"): Promise<RecordsResponse> {
+  const toRecord = shape === "import" ? rowToFlatRecord : rowToFlatDisplayRecord;
   const ref = deps.source();
   if (!ref) throw new NotConfiguredError([COMPETITIVE_GALLERY_LABEL]);
   const table = tableName(ref);
@@ -39,7 +46,7 @@ export async function loadFlatFile(identity: SessionIdentity, deps: FlatFileDeps
       () => deps.authorize(identity),
       () => deps.query(buildFlatFileStatement(table))
     );
-    return { records: raw.slice(0, FLAT_FILE_ROW_LIMIT).map(rowToFlatDisplayRecord), truncated: raw.length > FLAT_FILE_ROW_LIMIT, rowLimit: FLAT_FILE_ROW_LIMIT };
+    return { records: raw.slice(0, FLAT_FILE_ROW_LIMIT).map(toRecord), truncated: raw.length > FLAT_FILE_ROW_LIMIT, rowLimit: FLAT_FILE_ROW_LIMIT };
   } catch (error) {
     if (error instanceof CiError) throw error;
     // The Databricks message goes to the server log only; the browser gets a safe sentence.

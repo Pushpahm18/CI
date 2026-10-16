@@ -25,7 +25,7 @@ export function buildHomeStatsStatement(table: string, filter?: Filter): string 
 export function buildHomeRecentStatement(table: string, filter?: Filter, limit = HOME_RECENT_COUNT): string {
   const M = MAIN_COLUMNS;
   const stamp = `COALESCE(${qCol(M.modifiedOn)}, CAST(${qCol(M.createdOn)} AS TIMESTAMP))`;
-  const cols = [M.recordId, M.customer, M.servedMarket, M.fabRegion, M.quarter, M.year].map(qCol).join(", ");
+  const cols = [M.recordId, M.applicationId, M.customer, M.servedMarket, M.fabRegion, M.quarter, M.year].map(qCol).join(", ");
   return `SELECT ${cols}, ${stamp} AS ${qCol("updated_at")} FROM ${qTable(table)} ${where(filter)} ORDER BY ${stamp} DESC, ${qCol(M.recordId)} LIMIT ${Math.trunc(limit)}`;
 }
 
@@ -33,6 +33,7 @@ export function rowToHomeRecent(row: Record<string, unknown>): HomeRecentRow & {
   const M = MAIN_COLUMNS;
   return {
     recordId: str(row[M.recordId]),
+    applicationId: str(row[M.applicationId]),
     customer: str(row[M.customer]),
     servedMarket: str(row[M.servedMarket]),
     quarter: str(row[M.quarter]),

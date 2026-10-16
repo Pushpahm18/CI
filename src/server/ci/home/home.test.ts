@@ -10,7 +10,7 @@ const T = "corp_marketing_dev.ci.ci_main";
 const id = { email: "p@example.com", name: "P" };
 const scope = { customers: ["Micron"], segments: "All" as const, regions: ["KOR"] };
 const cols = { customer: "customer", segment: "served_market", region: "fab_region" };
-const recentRow = (o: Record<string, unknown> = {}) => ({ ci_id: "r1", customer: "Micron", served_market: "DRAM", fab_region: "KOR", quarter: "Q1", year: "2026", updated_at: "2026-10-01T09:00:00Z", ...o });
+const recentRow = (o: Record<string, unknown> = {}) => ({ ci_id: "r1", application_id: "CI-0001", customer: "Micron", served_market: "DRAM", fab_region: "KOR", quarter: "Q1", year: "2026", updated_at: "2026-10-01T09:00:00Z", ...o });
 
 describe("Home statements", () => {
   it("are read-only, live rows only, with the scope in the WHERE clause when there is one", () => {
@@ -34,7 +34,7 @@ describe("Home statements", () => {
   it("maps the rows", () => {
     expect(rowToHomeStats({ n: "500", customers: "20", competitors: "18" })).toEqual({ rows: 500, customers: 20, competitors: 18 });
     expect(rowToHomeStats(undefined)).toEqual({ rows: 0, customers: 0, competitors: 0 });
-    expect(rowToHomeRecent(recentRow())).toMatchObject({ recordId: "r1", customer: "Micron", servedMarket: "DRAM", quarter: "Q1", year: "2026", updatedAt: "2026-10-01T09:00:00Z" });
+    expect(rowToHomeRecent(recentRow())).toMatchObject({ recordId: "r1", applicationId: "CI-0001", customer: "Micron", servedMarket: "DRAM", quarter: "Q1", year: "2026", updatedAt: "2026-10-01T09:00:00Z" });
   });
 });
 
@@ -55,7 +55,7 @@ describe("loadHome", () => {
   it("Corporate Marketing: unfiltered counts and the recent rows", async () => {
     const { deps, query } = make();
     const res = await loadHome(id, deps);
-    expect(res).toEqual({ rows: 3, customers: 2, competitors: 2, recent: [{ recordId: "r1", customer: "Micron", servedMarket: "DRAM", quarter: "Q1", year: "2026", updatedAt: "2026-10-01T09:00:00Z" }] });
+    expect(res).toEqual({ rows: 3, customers: 2, competitors: 2, recent: [{ recordId: "r1", applicationId: "CI-0001", customer: "Micron", servedMarket: "DRAM", quarter: "Q1", year: "2026", updatedAt: "2026-10-01T09:00:00Z" }] });
     expect(query.mock.calls.every(([sql]) => !sql.includes(" IN ("))).toBe(true);
   });
 

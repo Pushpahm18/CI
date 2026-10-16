@@ -113,6 +113,8 @@ export const ciApi = {
 
   home: () => request<HomeResponse>("/api/home"),
   flatFile: () => request<RecordsResponse>("/api/competitive-ff"),
+  /** Every live row in the form's own model (approved wafer label, numbers as numbers), for the Excel import's "Download existing rows". */
+  existingRowsForImport: () => request<RecordsResponse>("/api/competitive-ff?for=import"),
   ffAnalysis: (filters: FfFilters, group: FfGroupKey) => {
     const q = new URLSearchParams({ group });
     for (const [key, values] of Object.entries(filters)) for (const v of values ?? []) q.append(key, v);

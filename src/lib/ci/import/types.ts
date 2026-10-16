@@ -139,23 +139,32 @@ export interface ImportCommitResult {
   notification: { recipients: number; delivered: boolean };
 }
 
-// ---------------------------------------------------------------- add rows from Excel
+// ---------------------------------------------------------------- add / update rows from Excel
 
-export type ExcelRowStatus = "ready" | "error" | "empty";
+/** new = added; update = an existing row that changes; unchanged = an existing row identical to the file; error = left out. */
+export type ExcelRowStatus = "new" | "update" | "unchanged" | "error" | "empty";
 
 export interface ExcelRowsPreviewRow {
   /** 1-based line in the file (header = line 1). */
   line: number;
   status: ExcelRowStatus;
-  /** The row as it would be created (Fab Region and Revenue derived; Created By / Date set). */
+  /** The Application ID in the file ("" = a new row). */
+  applicationId: string;
+  /** A new row: as it would be created (Fab Region and Revenue derived; Created By / Date set). */
   record?: Omit<CompetitiveRecord, "recordId">;
+  /** An update: the full row as it would be saved (Fab Region and Revenue re-derived). */
+  updated?: CompetitiveRecord;
+  /** An update: what changes, field by field. */
+  changes: FieldChange[];
   issues: ImportIssue[];
 }
 
 export interface ExcelRowsSummary {
   totalRows: number;
   emptySkipped: number;
-  ready: number;
+  added: number;
+  updated: number;
+  unchanged: number;
   invalid: number;
   errors: number;
 }
@@ -168,6 +177,6 @@ export interface ExcelRowsPreview {
   rows: ExcelRowsPreviewRow[];
   issues: ImportIssue[];
   summary: ExcelRowsSummary;
-  /** True when the template matches and at least one row is valid. Invalid rows are left out. */
+  /** True when the template matches and at least one row would be added or updated. Rows with problems are left out. */
   canCommit: boolean;
 }

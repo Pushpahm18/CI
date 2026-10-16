@@ -45,6 +45,8 @@ export interface SessionResponse {
 /** One of the most recently updated rows on Home. */
 export interface HomeRecentRow {
   recordId: string;
+  /** ci_main.application_id as stored (shown on Home instead of the long record id; "" when the row has none). */
+  applicationId: string;
   customer: string;
   servedMarket: string;
   quarter: string;

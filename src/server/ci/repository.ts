@@ -50,6 +50,8 @@ export interface CiRepository {
   getRecord(recordId: string): Promise<CompetitiveRecord | null>;
   /** Batch read by Record ID (Bulk Update); unknown IDs are simply absent. */
   getRecords(recordIds: string[]): Promise<CompetitiveRecord[]>;
+  /** Batch read by Application ID (Excel import's key); unknown ids are simply absent. */
+  getRecordsByApplicationIds(applicationIds: string[]): Promise<CompetitiveRecord[]>;
   /** Inserts and returns the row with its system-assigned Record ID. */
   createRecord(record: Omit<CompetitiveRecord, "recordId">): Promise<CompetitiveRecord>;
   updateRecord(record: CompetitiveRecord): Promise<void>;
@@ -100,6 +102,7 @@ export const REPOSITORY_METHOD_TABLES: Record<keyof CiRepository, readonly CiTab
   listRecords: ["competitiveInfo"],
   getRecord: ["competitiveInfo"],
   getRecords: ["competitiveInfo"],
+  getRecordsByApplicationIds: ["competitiveInfo"],
   createRecord: ["competitiveInfo"],
   updateRecord: ["competitiveInfo"],
   discardRecord: ["competitiveInfo"],
@@ -195,8 +198,11 @@ export function composeRepository(base: CiRepository, lookups: LookupStore | nul
       listRecords: (scope) => records.listRecords(scope),
       getRecord: (id) => records.getRecord(id),
       getRecords: (ids) => records.getRecords(ids),
+      getRecordsByApplicationIds: (ids) => records.getRecordsByApplicationIds(ids),
       createRecord: (record) => records.createRecord(record),
+      createRecords: (items) => records.createRecords(items),
       updateRecord: (record) => records.updateRecord(record),
+      updateRecords: (items) => records.updateRecords(items),
       discardRecord: (id) => records.discardRecord(id),
     };
   }

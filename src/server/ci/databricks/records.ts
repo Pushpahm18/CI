@@ -34,8 +34,14 @@ export interface RecordStore {
   listRecords(scope: DataScope): Promise<CompetitiveRecord[]>;
   getRecord(recordId: string): Promise<CompetitiveRecord | null>;
   getRecords(recordIds: string[]): Promise<CompetitiveRecord[]>;
+  /** Live rows by Application ID (Excel import's key); unknown ids are simply absent. */
+  getRecordsByApplicationIds(applicationIds: string[]): Promise<CompetitiveRecord[]>;
   createRecord(record: Omit<CompetitiveRecord, "recordId">): Promise<CompetitiveRecord>;
+  /** Excel import: many new rows, each with its own Application ID. Lands whole, or the earlier groups are switched off. */
+  createRecords(records: Omit<CompetitiveRecord, "recordId">[]): Promise<CompetitiveRecord[]>;
   updateRecord(record: CompetitiveRecord): Promise<void>;
+  /** Excel import: one UPDATE per row, in order. The caller restores the earlier rows if one fails. */
+  updateRecords(records: CompetitiveRecord[]): Promise<void>;
   /** Sets is_active = FALSE on one row (undoing a create); nothing is deleted. */
   discardRecord(recordId: string): Promise<void>;
 }
@@ -139,19 +145,50 @@ export function applicationIdFor(maxSeq: unknown): string {
  * One INSERT of one row, written only if no row already has this Application ID (INSERT ... SELECT ... WHERE NOT EXISTS in a
  * single statement, as SAMBA does). The database has no UNIQUE constraint, so createRecord() also reads the row back.
  */
+/** The (column, value) pairs of one new row, in a fixed order, so several rows can be selected side by side. */
+function newRowEntries(recordId: string, r: Omit<CompetitiveRecord, "recordId">, applicationId: string): [string, unknown][] {
+  return [
+    [M.recordId, recordId],
+    ...editableValues(r),
+    [M.createdBy, r.createdBy],
+    [M.createdOn, dateLiteral(r.createdOn)],
+    [M.modifiedBy, null],
+    [M.modifiedOn, null],
+    [M.active, true],
+    [M.applicationId, applicationId],
+  ];
+}
+
+/**
+ * One INSERT of several new rows with consecutive Application IDs, written only if NONE of those ids is taken yet
+ * (a single statement, so the group lands whole or not at all).
+ */
+export function buildInsertRecordsStatement(table: string, items: { recordId: string; record: Omit<CompetitiveRecord, "recordId">; applicationId: string }[]): string {
+  if (items.length === 0) throw new Error("INSERT needs at least one row");
+  const rows = items.map((i) => newRowEntries(i.recordId, i.record, i.applicationId));
+  const columns = rows[0].map(([c]) => qCol(c)).join(", ");
+  const selects = rows.map((entries) => `SELECT ${entries.map(([c, v]) => `${sqlLiteral(v)} AS ${qCol(c)}`).join(", ")}`).join(" UNION ALL ");
+  const ids = items.map((i) => sqlLiteral(i.applicationId)).join(", ");
+  return `INSERT INTO ${qTable(table)} (${columns}) SELECT * FROM (${selects}) AS v WHERE NOT EXISTS (SELECT 1 FROM ${qTable(table)} WHERE ${qCol(M.applicationId)} IN (${ids}))`;
+}
+
+export function buildGetByApplicationIdsStatement(table: string, applicationIds: string[]): string {
+  return `SELECT ${ALL_COLUMNS} FROM ${qTable(table)} WHERE ${LIVE} AND ${sqlIn(M.applicationId, applicationIds)}`;
+}
+
+export function buildRecordsLandedStatement(table: string, recordIds: string[]): string {
+  return `SELECT COUNT(*) AS cnt FROM ${qTable(table)} WHERE ${sqlIn(M.recordId, recordIds)}`;
+}
+
+export function buildDiscardRecordsStatement(table: string, recordIds: string[]): string {
+  return `UPDATE ${qTable(table)} SET ${qCol(M.active)} = FALSE WHERE ${sqlIn(M.recordId, recordIds)}`;
+}
+
+/** Rows written per INSERT of an Excel import. Larger imports are split into groups of this size (each group lands whole). */
+export const INSERT_GROUP_SIZE = 200;
+
 export function buildInsertRecordStatement(table: string, recordId: string, r: Omit<CompetitiveRecord, "recordId">, applicationId: string): string {
-  const row = Object.entries(
-    Object.fromEntries([
-      [M.recordId, recordId],
-      ...editableValues(r),
-      [M.createdBy, r.createdBy],
-      [M.createdOn, dateLiteral(r.createdOn)],
-      [M.modifiedBy, null],
-      [M.modifiedOn, null],
-      [M.active, true],
-      [M.applicationId, applicationId],
-    ])
-  );
+  const row = newRowEntries(recordId, r, applicationId);
   const columns = row.map(([c]) => qCol(c)).join(", ");
   const selected = row.map(([c, v]) => `${sqlLiteral(v)} AS ${qCol(c)}`).join(", ");
   return (
@@ -209,7 +246,8 @@ export function createRecordStore(table: string, deps: RecordStoreDeps = default
       const recordId = deps.newId();
       for (let attempt = 0; attempt < APPLICATION_ID_ATTEMPTS; attempt++) {
         const [top] = await deps.query(buildMaxApplicationSeqStatement(table));
-        const statement = buildInsertRecordStatement(table, recordId, record, applicationIdFor(top?.maxSeq));
+        const applicationId = applicationIdFor(top?.maxSeq);
+        const statement = buildInsertRecordStatement(table, recordId, record, applicationId);
         try {
           await write(statement);
         } catch (error) {
@@ -218,9 +256,57 @@ export function createRecordStore(table: string, deps: RecordStoreDeps = default
           continue;
         }
         const [landed] = await deps.query(buildRecordLandedStatement(table, recordId));
-        if (Number(landed?.cnt ?? 0) > 0) return { ...record, recordId };
+        if (Number(landed?.cnt ?? 0) > 0) return { ...record, recordId, applicationId };
       }
       throw new ConflictError(`Could not get a free Application ID after ${APPLICATION_ID_ATTEMPTS} attempts. Please save again.`);
+    },
+    async getRecordsByApplicationIds(applicationIds) {
+      if (applicationIds.length === 0) return [];
+      return (await deps.query(buildGetByApplicationIdsStatement(table, applicationIds))).map(rowToFlatRecord);
+    },
+    async createRecords(records) {
+      // Groups of INSERT_GROUP_SIZE rows, each with consecutive Application IDs after the current highest, inserted only if
+      // none of them is taken, and read back. A group that lost a race is retried with fresh numbers. If a later group
+      // fails, the earlier groups are switched off (is_active = FALSE, nothing deleted) so an import is never half-saved.
+      const created: CompetitiveRecord[] = [];
+      try {
+        for (let from = 0; from < records.length; from += INSERT_GROUP_SIZE) {
+          const group = records.slice(from, from + INSERT_GROUP_SIZE);
+          const recordIds = group.map(() => deps.newId());
+          let landed = false;
+          for (let attempt = 0; attempt < APPLICATION_ID_ATTEMPTS && !landed; attempt++) {
+            const [top] = await deps.query(buildMaxApplicationSeqStatement(table));
+            const first = Number(top?.maxSeq);
+            const ids = group.map((_, i) => applicationIdFor((Number.isFinite(first) ? first : 0) + i));
+            try {
+              await write(buildInsertRecordsStatement(table, group.map((record, i) => ({ recordId: recordIds[i], record, applicationId: ids[i] }))));
+            } catch (error) {
+              if (error instanceof ValidationError) throw error;
+              console.error("[CI] importing rows failed (likely a concurrent write); trying the next Application IDs:", error instanceof Error ? error.message : error);
+              continue;
+            }
+            const [count] = await deps.query(buildRecordsLandedStatement(table, recordIds));
+            if (Number(count?.cnt ?? 0) === group.length) {
+              landed = true;
+              group.forEach((record, i) => created.push({ ...record, recordId: recordIds[i], applicationId: ids[i] }));
+            }
+          }
+          if (!landed) throw new ConflictError(`Could not get free Application IDs after ${APPLICATION_ID_ATTEMPTS} attempts. Please import again.`);
+        }
+      } catch (error) {
+        if (created.length > 0) {
+          try {
+            await write(buildDiscardRecordsStatement(table, created.map((c) => c.recordId)));
+          } catch (undoError) {
+            console.error("[CI] could not switch off the rows of a failed import:", undoError instanceof Error ? undoError.message : undoError);
+          }
+        }
+        throw error;
+      }
+      return created;
+    },
+    async updateRecords(records) {
+      for (const record of records) await write(buildUpdateRecordStatement(table, record));
     },
     async updateRecord(record) {
       await write(buildUpdateRecordStatement(table, record));

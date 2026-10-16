@@ -143,6 +143,11 @@ const mockRepository: CiRepository = {
     const ids = new Set(recordIds);
     return clone(store().records.filter((r) => ids.has(r.recordId)));
   },
+  // The mock's Record ID is the CI-0001 style id, so it doubles as the Application ID.
+  async getRecordsByApplicationIds(applicationIds) {
+    const ids = new Set(applicationIds);
+    return clone(store().records.filter((r) => ids.has(r.applicationId ?? r.recordId)));
+  },
   async createRecord(record) {
     const s = store();
     const created = { ...record, recordId: nextRecordId(s) };

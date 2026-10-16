@@ -138,7 +138,7 @@ export default function HomePage() {
                       <History className="h-4 w-4" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <b className="block text-[14.5px] text-foreground">{r.recordId}</b>
+                      <b className="block text-[14.5px] text-foreground">{r.applicationId || r.recordId}</b>
                       <small className="block truncate text-[12.5px] text-muted">
                         {r.customer} / {r.servedMarket} · {r.quarter} {r.year}
                       </small>
