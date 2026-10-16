@@ -25,7 +25,9 @@ import {
   assertRecordWriteStatement,
   buildDiscardRecordStatement,
   buildGetRecordsStatement,
+  applicationIdFor,
   buildInsertRecordStatement,
+  buildMaxApplicationSeqStatement,
   buildListRecordsStatement,
   buildUpdateRecordStatement,
   createRecordStore,
@@ -224,11 +226,11 @@ describe("audit history (audit.ci_audit_history)", () => {
 
 describe("competitive rows (ci_main)", () => {
   it("inserts one row with a DATE for created_date, the stored wafer number, is_active TRUE and no modified values", () => {
-    const sql = buildInsertRecordStatement(MAIN, "11111111-2222-3333-4444-555555555555", record());
+    const sql = buildInsertRecordStatement(MAIN, "11111111-2222-3333-4444-555555555555", record(), "CI-0502");
     expect(sql.startsWith("INSERT INTO `corp_marketing_dev`.`ci`.`ci_main` (")).toBe(true);
     expect(sql).toContain("'11111111-2222-3333-4444-555555555555'");
     expect(sql).toContain("CAST('2026-10-13' AS DATE)");
-    expect(sql).toMatch(/, 300, /); // wafer_size_mm: the approved label stored as the number
+    expect(sql).toMatch(/, 300 AS `wafer_size_mm`/); // wafer_size_mm: the approved label stored as the number
     expect(sql).not.toContain("300mm");
     expect(sql).toContain("TRUE");
     expect(sql).not.toContain("TIMESTAMP"); // modified_date is NULL on create
@@ -236,12 +238,53 @@ describe("competitive rows (ci_main)", () => {
     expect(() => assertCiWriteStatement(sql)).not.toThrow();
   });
 
+  it("numbers Application IDs CI-0001, CI-0002, ...: the highest stored number + 1, growing past four digits", () => {
+    expect(applicationIdFor(501)).toBe("CI-0502");
+    expect(applicationIdFor("501")).toBe("CI-0502");
+    expect(applicationIdFor(null)).toBe("CI-0001");
+    expect(applicationIdFor(9999)).toBe("CI-10000");
+    const max = buildMaxApplicationSeqStatement(MAIN);
+    expect(max).toContain("RLIKE '^CI-[0-9]+$'");
+    expect(max).not.toContain("is_active"); // every row, live or not, so a number is never reused
+    expect(() => assertReadOnlyStatement(max)).not.toThrow();
+  });
+
+  it("writes the Application ID only if no row already has it, in one guarded statement", () => {
+    const sql = buildInsertRecordStatement(MAIN, "x", record(), "CI-0502");
+    expect(sql).toContain("'CI-0502' AS `application_id`");
+    expect(sql).toContain("WHERE NOT EXISTS (SELECT 1 FROM `corp_marketing_dev`.`ci`.`ci_main` WHERE `application_id` = 'CI-0502')");
+    expect(() => assertRecordWriteStatement(MAIN, sql)).not.toThrow();
+    expect(() => assertCiWriteStatement(sql)).not.toThrow();
+  });
+
+  it("retries with the next number when another create took it first, and gives up after five attempts", async () => {
+    const written: string[] = [];
+    let seq = 501;
+    // The first attempt's number is taken by someone else just before our insert: our NOT EXISTS inserts nothing, the winner's row
+    // raises the maximum, and the second attempt (the next number) lands.
+    const store = createRecordStore(MAIN, {
+      query: async (sql) => (sql.includes("maxSeq") ? [{ maxSeq: String(seq) }] : [{ cnt: written.length >= 2 ? "1" : "0" }]),
+      execute: async (sql) => {
+        written.push(sql);
+        if (written.length === 1) seq += 1;
+      },
+      newId: () => "new-uuid",
+    });
+    await store.createRecord(record());
+    expect(written).toHaveLength(2);
+    expect(written[0]).toContain("'CI-0502' AS `application_id`");
+    expect(written[1]).toContain("'CI-0503' AS `application_id`");
+
+    const never = createRecordStore(MAIN, { query: async (sql) => (sql.includes("maxSeq") ? [{ maxSeq: "1" }] : [{ cnt: "0" }]), execute: vi.fn(async () => {}), newId: () => "x" });
+    await expect(never.createRecord(record())).rejects.toThrow(/Could not get a free Application ID after 5 attempts/);
+  });
+
   it("stores a blank optional value as NULL and refuses a wafer size or year it cannot store", () => {
-    expect(buildInsertRecordStatement(MAIN, "x", record({ films: "", waferSize: "" }))).toContain("NULL");
-    expect(() => buildInsertRecordStatement(MAIN, "x", record({ waferSize: "450mm" }))).toThrow(ValidationError);
+    expect(buildInsertRecordStatement(MAIN, "x", record({ films: "", waferSize: "" }), "CI-0001")).toContain("NULL");
+    expect(() => buildInsertRecordStatement(MAIN, "x", record({ waferSize: "450mm" }), "CI-0001")).toThrow(ValidationError);
     const refused = (() => {
       try {
-        buildInsertRecordStatement(MAIN, "x", record({ waferSize: "100" }));
+        buildInsertRecordStatement(MAIN, "x", record({ waferSize: "100" }), "CI-0001");
         return null;
       } catch (e) {
         return e as ValidationError;
@@ -250,9 +293,9 @@ describe("competitive rows (ci_main)", () => {
     // The message names the exact approved labels, so a person can see what to put in the list.
     expect((refused?.details ?? []).join(" ")).toContain('Wafer Size "100" is not one of the approved sizes: 150mm (6"), 200mm (8"), 300mm (12")');
     // The same approved sizes written more simply are stored as the number.
-    for (const spelling of ["300mm", "300", "300 mm"]) expect(buildInsertRecordStatement(MAIN, "x", record({ waferSize: spelling }))).toMatch(/, 300, /);
-    expect(() => buildInsertRecordStatement(MAIN, "x", record({ year: "20x6" }))).toThrow(ValidationError);
-    expect(() => buildInsertRecordStatement(MAIN, "x", record({ createdOn: "13/10/2026" }))).toThrow(/Invalid date/);
+    for (const spelling of ["300mm", "300", "300 mm"]) expect(buildInsertRecordStatement(MAIN, "x", record({ waferSize: spelling }), "CI-0001")).toMatch(/, 300 AS `wafer_size_mm`/);
+    expect(() => buildInsertRecordStatement(MAIN, "x", record({ year: "20x6" }), "CI-0001")).toThrow(ValidationError);
+    expect(() => buildInsertRecordStatement(MAIN, "x", record({ createdOn: "13/10/2026" }), "CI-0001")).toThrow(/Invalid date/);
   });
 
   it("updates one live row by id, never touching the id or the created-once columns", () => {
@@ -293,7 +336,7 @@ describe("competitive rows (ci_main)", () => {
 
   it("creates with a new id, returns the saved row, and sends only guarded statements", async () => {
     const execute = vi.fn(async () => {});
-    const store = createRecordStore(MAIN, { query: async () => [], execute, newId: () => "new-uuid" });
+    const store = createRecordStore(MAIN, { query: async (sql) => (sql.includes("maxSeq") ? [{ maxSeq: "501" }] : sql.includes("cnt") ? [{ cnt: "1" }] : []), execute, newId: () => "new-uuid" });
     const created = await store.createRecord(record());
     expect(created.recordId).toBe("new-uuid");
     expect(created.customer).toBe("UMC");

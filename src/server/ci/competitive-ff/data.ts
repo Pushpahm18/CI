@@ -18,7 +18,47 @@ export function buildFlatFileStatement(table: string, limit = FLAT_FILE_ROW_LIMI
   return `SELECT ${cols} FROM ${qTable(table)} WHERE ${qCol(M.active)} = TRUE ORDER BY ${qCol(M.createdOn)} DESC, ${qCol(M.recordId)} LIMIT ${Math.trunc(limit) + 1}`;
 }
 
-/** A ci_main row as the screens' CompetitiveRecord. Text stays as stored; numbers are numbers; the wafer size shows its label when it is one of the approved three. */
+/**
+ * A ci_main row for the Competitive FF GRID: every column exactly as stored in Databricks (the SQL result text, nothing trimmed,
+ * mapped, labelled, converted to a number or reformatted; a NULL is an empty string). The fields typed as numbers on
+ * CompetitiveRecord carry the stored text here, which the grid shows as it is. Only the Competitive FF screen uses this.
+ */
+export function rowToFlatDisplayRecord(row: Record<string, unknown>): CompetitiveRecord {
+  const M = MAIN_COLUMNS;
+  const text = (v: unknown): string => (v == null ? "" : String(v));
+  const asNumberField = (v: unknown) => text(v) as unknown as number;
+  return {
+    recordId: text(row[M.recordId]),
+    quarter: text(row[M.quarter]),
+    year: text(row[M.year]),
+    customer: text(row[M.customer]),
+    fabLocation: text(row[M.fabLocation]),
+    fabRegion: text(row[M.fabRegion]),
+    servedMarket: text(row[M.servedMarket]),
+    technologyNode: text(row[M.technologyNode]),
+    waferSize: text(row[M.waferSize]),
+    processApplication: text(row[M.processApplication]),
+    processType: text(row[M.processType]),
+    processLocation: text(row[M.processLocation]),
+    films: text(row[M.films]),
+    productLine: text(row[M.productLine]),
+    topCompetitor: text(row[M.topCompetitor]),
+    productName: text(row[M.productName]),
+    processModules: text(row[M.processModules]),
+    orderType: text(row[M.orderType]),
+    actualOrder: asNumberField(row[M.actualOrder]),
+    asp: asNumberField(row[M.asp]),
+    currency: text(row[M.currency]),
+    revenue: asNumberField(row[M.revenue]),
+    toolType: text(row[M.toolType]),
+    createdBy: text(row[M.createdBy]),
+    createdOn: text(row[M.createdOn]),
+    modifiedBy: text(row[M.modifiedBy]) || undefined,
+    modifiedOn: text(row[M.modifiedOn]) || undefined,
+  };
+}
+
+/** A ci_main row as the form / import logic's CompetitiveRecord (NOT for grid display: see rowToFlatDisplayRecord). Text stays as stored; numbers are numbers; the wafer size shows its label when it is one of the approved three. */
 export function rowToFlatRecord(row: Record<string, unknown>): CompetitiveRecord {
   const M = MAIN_COLUMNS;
   return {

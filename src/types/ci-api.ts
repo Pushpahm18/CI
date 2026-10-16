@@ -155,6 +155,36 @@ export interface CiUserWriteResponse {
 /** GET /api/user-management/ci-users */
 export interface CiUserRecordsResponse {
   users: CiUserRecordRaw[];
+  /** Live ci_main rows per created_by name, counted by Databricks. Absent when ci_main could not be read. */
+  ownedRows?: Record<string, number>;
+}
+
+/** GET /api/user-management/ci-users/{id}/offboard: rows the leaver created, or why they cannot be off-boarded. */
+export interface CiOffboardPreviewResponse {
+  ownedRows: number;
+  blocked: string | null;
+}
+
+/** GET /api/user-management/ci-users/{id}/offboard-details: who took over, read from the audit history. */
+export type CiOffboardDetailsResponse =
+  | { found: false; leaverName: string }
+  | {
+      found: true;
+      leaverName: string;
+      newOwner: { name: string; email: string; role: string };
+      rows: number;
+      at: string;
+      by: string;
+      /** The new owner's scope before and after it was combined with the leaver's (empty when no scope changed). */
+      scope: { label: string; before: string; after: string }[];
+      scopeCombined: boolean;
+    };
+
+/** POST /api/user-management/ci-users/{id}/offboard */
+export interface CiOffboardResponse {
+  reassignedRows: number;
+  user: CiUserRecordRaw;
+  newOwner: CiUserRecordRaw;
 }
 
 /** POST /api/competitive-info/import — see lib/ci/import/types.ts for the preview/result shapes. */

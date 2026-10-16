@@ -4,12 +4,12 @@ import { WAFER_SIZE_LABELS, waferStoredForInput } from "@/lib/ci/wafer-size";
 import { randomUUID } from "node:crypto";
 import { FLAT_FILE_ROW_LIMIT, rowToFlatRecord } from "@/server/ci/competitive-ff/data";
 import { scopePredicates } from "@/server/ci/competitive-gallery/data";
-import { ValidationError } from "@/server/ci/errors";
+import { ConflictError, ValidationError } from "@/server/ci/errors";
 import { hasWarehouseBackend } from "@/server/config";
 import { MAIN_COLUMNS as M } from "@/server/db/main-columns";
 import { executeReadOnlyQuery } from "@/server/db/read-only";
 import { CI_TABLES, MAIN_SCOPE_COLUMNS, ciTableName, type CiTables } from "@/server/db/schema";
-import { SqlRaw, buildInsert, qCol, qTable, sqlIn, sqlLiteral, tsLiteral } from "@/server/db/sql";
+import { SqlRaw, qCol, qTable, sqlIn, sqlLiteral, tsLiteral } from "@/server/db/sql";
 import { executeStatement } from "@/server/db/warehouse";
 
 /**
@@ -17,7 +17,9 @@ import { executeStatement } from "@/server/db/warehouse";
  *
  *   list / get   only live rows (is_active = TRUE); a Sales scope is applied in the WHERE clause, so out-of-scope
  *                rows never leave the database
- *   create       ONE INSERT of one row with a new UUID Record ID (the existing rows' ids are UUIDs) and is_active = TRUE
+ *   create       ONE INSERT of one row with a new UUID Record ID (the existing rows' ids are UUIDs), is_active = TRUE and the next
+ *                Application ID CI-nnnn (highest stored number + 1, as in SAMBA: inserted only if that id is free, read back,
+ *                and retried with a fresh number if another create took it first)
  *   update       ONE UPDATE of the editable columns of one live row, keyed on ci_id
  *
  * Nothing is ever deleted, and Created By / Created Date are written once, at creation. Every data-changing statement
@@ -112,17 +114,54 @@ function editableValues(r: Omit<CompetitiveRecord, "recordId">): [string, unknow
   ];
 }
 
-export function buildInsertRecordStatement(table: string, recordId: string, r: Omit<CompetitiveRecord, "recordId">): string {
-  const row = Object.fromEntries([
-    [M.recordId, recordId],
-    ...editableValues(r),
-    [M.createdBy, r.createdBy],
-    [M.createdOn, dateLiteral(r.createdOn)],
-    [M.modifiedBy, null],
-    [M.modifiedOn, null],
-    [M.active, true],
-  ]);
-  return buildInsert(table, [row]);
+/** Every Application ID starts with this prefix, then "-", then a zero-padded running number: CI-0001, CI-0002, ... */
+export const APPLICATION_ID_PREFIX = "CI";
+const APPLICATION_ID_DIGITS = 4;
+/** How many times a create picks a fresh number when another create took it first (the same retry SAMBA uses). */
+export const APPLICATION_ID_ATTEMPTS = 5;
+
+/** The highest number already used with this prefix, on any row (live or not, so a number is never reused). */
+export function buildMaxApplicationSeqStatement(table: string): string {
+  const col = qCol(M.applicationId);
+  return (
+    `SELECT MAX(TRY_CAST(SUBSTRING(${col}, ${APPLICATION_ID_PREFIX.length + 2}) AS BIGINT)) AS maxSeq FROM ${qTable(table)} ` +
+    `WHERE ${col} RLIKE ${sqlLiteral(`^${APPLICATION_ID_PREFIX}-[0-9]+$`)}`
+  );
+}
+
+/** CI-0502 from the current maximum 501 (a blank table starts at CI-0001). The number just grows past 9999. */
+export function applicationIdFor(maxSeq: unknown): string {
+  const next = (Number.isFinite(Number(maxSeq)) ? Number(maxSeq) : 0) + 1;
+  return `${APPLICATION_ID_PREFIX}-${String(next).padStart(APPLICATION_ID_DIGITS, "0")}`;
+}
+
+/**
+ * One INSERT of one row, written only if no row already has this Application ID (INSERT ... SELECT ... WHERE NOT EXISTS in a
+ * single statement, as SAMBA does). The database has no UNIQUE constraint, so createRecord() also reads the row back.
+ */
+export function buildInsertRecordStatement(table: string, recordId: string, r: Omit<CompetitiveRecord, "recordId">, applicationId: string): string {
+  const row = Object.entries(
+    Object.fromEntries([
+      [M.recordId, recordId],
+      ...editableValues(r),
+      [M.createdBy, r.createdBy],
+      [M.createdOn, dateLiteral(r.createdOn)],
+      [M.modifiedBy, null],
+      [M.modifiedOn, null],
+      [M.active, true],
+      [M.applicationId, applicationId],
+    ])
+  );
+  const columns = row.map(([c]) => qCol(c)).join(", ");
+  const selected = row.map(([c, v]) => `${sqlLiteral(v)} AS ${qCol(c)}`).join(", ");
+  return (
+    `INSERT INTO ${qTable(table)} (${columns}) SELECT ${selected} ` +
+    `WHERE NOT EXISTS (SELECT 1 FROM ${qTable(table)} WHERE ${qCol(M.applicationId)} = ${sqlLiteral(applicationId)})`
+  );
+}
+
+export function buildRecordLandedStatement(table: string, recordId: string): string {
+  return `SELECT COUNT(*) AS cnt FROM ${qTable(table)} WHERE ${qCol(M.recordId)} = ${sqlLiteral(recordId)}`;
 }
 
 export function buildUpdateRecordStatement(table: string, r: CompetitiveRecord): string {
@@ -165,9 +204,23 @@ export function createRecordStore(table: string, deps: RecordStoreDeps = default
       return (await getRecords([recordId]))[0] ?? null;
     },
     async createRecord(record) {
+      // Pick the next Application ID, insert only if nobody has it, and confirm the row landed; if another create took the
+      // number first (or Databricks rejected a concurrent write), pick a fresh one and try again.
       const recordId = deps.newId();
-      await write(buildInsertRecordStatement(table, recordId, record));
-      return { ...record, recordId };
+      for (let attempt = 0; attempt < APPLICATION_ID_ATTEMPTS; attempt++) {
+        const [top] = await deps.query(buildMaxApplicationSeqStatement(table));
+        const statement = buildInsertRecordStatement(table, recordId, record, applicationIdFor(top?.maxSeq));
+        try {
+          await write(statement);
+        } catch (error) {
+          if (error instanceof ValidationError) throw error;
+          console.error("[CI] creating a row failed (likely a concurrent write); trying the next Application ID:", error instanceof Error ? error.message : error);
+          continue;
+        }
+        const [landed] = await deps.query(buildRecordLandedStatement(table, recordId));
+        if (Number(landed?.cnt ?? 0) > 0) return { ...record, recordId };
+      }
+      throw new ConflictError(`Could not get a free Application ID after ${APPLICATION_ID_ATTEMPTS} attempts. Please save again.`);
     },
     async updateRecord(record) {
       await write(buildUpdateRecordStatement(table, record));

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { assertReadOnlyStatement } from "@/server/db/read-only";
 import { CiError, ForbiddenError, NotConfiguredError } from "@/server/ci/errors";
-import { FLAT_FILE_ROW_LIMIT, buildFlatFileStatement, rowToFlatRecord } from "@/server/ci/competitive-ff/data";
+import { FLAT_FILE_ROW_LIMIT, buildFlatFileStatement, rowToFlatDisplayRecord, rowToFlatRecord } from "@/server/ci/competitive-ff/data";
 import { loadFlatFile, type FlatFileDeps } from "@/server/ci/competitive-ff/service";
 
 // Fakes only: no database connection is opened.
@@ -35,6 +35,43 @@ describe("Competitive FF data", () => {
 
   it("a wafer size outside the approved three is shown exactly as stored", () => {
     expect(rowToFlatRecord({ ...raw, wafer_size_mm: "450.0" }).waferSize).toBe("450.0");
+  });
+});
+
+describe("Competitive FF grid shows the stored values exactly", () => {
+  it("carries every column through as the stored text: no label mapping, no number conversion, no trimming", () => {
+    const r = rowToFlatDisplayRecord({ ...raw, customer: " Samsung ", asp_million: "4.70" });
+    expect(r.waferSize).toBe("300.0");
+    expect(String(r.actualOrder)).toBe("6.0");
+    expect(String(r.asp)).toBe("4.70");
+    expect(String(r.revenue)).toBe("28.259999999999998");
+    expect(r.createdOn).toBe("2026-04-02");
+    expect(r.customer).toBe(" Samsung ");
+    expect(r.year).toBe("2026");
+  });
+
+  it("a NULL is an empty string and nothing else is invented", () => {
+    const r = rowToFlatDisplayRecord({ ...raw, wafer_size_mm: null, actual_order: null });
+    expect(r.waferSize).toBe("");
+    expect(String(r.actualOrder)).toBe("");
+    expect(r.films).toBe("");
+    expect(r.modifiedBy).toBeUndefined();
+  });
+
+  it("the grid cell text is the stored text for the columns that used to be formatted", async () => {
+    const { displayValue } = await import("@/components/ci/record-columns");
+    const r = rowToFlatDisplayRecord(raw);
+    expect(displayValue(r, "waferSize")).toBe("300.0");
+    expect(displayValue(r, "actualOrder")).toBe("6.0");
+    expect(displayValue(r, "asp")).toBe("4.71");
+    expect(displayValue(r, "revenue")).toBe("28.259999999999998");
+    expect(displayValue(r, "createdOn")).toBe("02-Apr-2026"); // the one date display format: dd-mmm-yyyy
+  });
+
+  it("the form / import mapper is unchanged (it still labels the wafer size and reads numbers)", () => {
+    const r = rowToFlatRecord(raw);
+    expect(r.waferSize).toBe('300mm (12")');
+    expect(r.actualOrder).toBe(6);
   });
 });
 

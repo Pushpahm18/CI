@@ -17,6 +17,9 @@ import type {
   ReorderLookupsRequest,
   GalleryResponse,
   HomeResponse,
+  CiOffboardDetailsResponse,
+  CiOffboardPreviewResponse,
+  CiOffboardResponse,
   CiUserRecordsResponse,
   CiUserWriteResponse,
   LoginHistoryResponse,
@@ -30,6 +33,7 @@ import type {
   UsersResponse,
 } from "@/types/ci-api";
 import type { CiUser, LookupValue } from "@/types/ci";
+import type { FfAnalysisResponse, FfFilters, FfGroupKey } from "@/lib/ci/ff-analysis";
 import type { UserFormValues as CiUserFormBody } from "@/lib/ci/user-form";
 import type { BulkPreview, ExcelRowsPreview, HistoricOptions, HistoricPreview, ImportCommitResult, ParsedSheet } from "@/lib/ci/import/types";
 
@@ -109,6 +113,11 @@ export const ciApi = {
 
   home: () => request<HomeResponse>("/api/home"),
   flatFile: () => request<RecordsResponse>("/api/competitive-ff"),
+  ffAnalysis: (filters: FfFilters, group: FfGroupKey) => {
+    const q = new URLSearchParams({ group });
+    for (const [key, values] of Object.entries(filters)) for (const v of values ?? []) q.append(key, v);
+    return request<FfAnalysisResponse>(`/api/competitive-ff/analysis?${q.toString()}`);
+  },
 
   listUsers: () => request<UsersResponse>("/api/user-management"),
   createUser: (body: SaveUserRequest) =>
@@ -156,6 +165,10 @@ export const ciApi = {
   updateCiUser: (id: string, body: CiUserFormBody) =>
     request<CiUserWriteResponse>(`/api/user-management/ci-users/${encodeURIComponent(id)}`, { method: "PUT", body: json(body) }),
   deactivateCiUser: (id: string) => request<CiUserWriteResponse>(`/api/user-management/ci-users/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  ciOffboardPreview: (id: string) => request<CiOffboardPreviewResponse>(`/api/user-management/ci-users/${encodeURIComponent(id)}/offboard`),
+  ciOffboardDetails: (id: string) => request<CiOffboardDetailsResponse>(`/api/user-management/ci-users/${encodeURIComponent(id)}/offboard-details`),
+  ciOffboard: (id: string, reassignToUserId: string) =>
+    request<CiOffboardResponse>(`/api/user-management/ci-users/${encodeURIComponent(id)}/offboard`, { method: "POST", body: json({ reassignToUserId }) }),
   reactivateCiUser: (id: string) =>
     request<CiUserWriteResponse>(`/api/user-management/ci-users/${encodeURIComponent(id)}/reactivate`, { method: "POST" }),
   userAccessDirectory: () => request<DirectoryUsersResponse>("/api/user-access/directory"),

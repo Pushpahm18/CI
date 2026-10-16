@@ -168,10 +168,7 @@ describe("no SAMBA authorization and no SAMBA writes from CI", () => {
   });
 
   it("the non-login screens authorize through the CI authorizer, not SAMBA or a bypass", () => {
-    const files = [
-      "src/server/ci/form-options/service.ts",
-      "src/server/ci/lookups/service.ts",
-    ];
+    const files = ["src/server/ci/lookups/service.ts"];
     // User Management (list and Add User) uses the same check plus the development-only rule in dev-access.ts.
     for (const f of ["src/server/ci/user-management/ci-users.ts", "src/server/ci/user-management/ci-users-write.ts"]) {
       const text = readFileSync(f, "utf8");
@@ -188,6 +185,10 @@ describe("no SAMBA authorization and no SAMBA writes from CI", () => {
     const directory = readFileSync("src/server/ci/user-access/service.ts", "utf8");
     expect(directory).toContain("authorizeUserManagement");
     expect(directory).not.toMatch(/authorizeUserAccessManager|samba_|requireCorporateMarketingActor/);
+    // The Add / Edit form's dropdown options are loaded by Account Team as well (trimmed to their scope), so they use the CI authorizer, not the Corporate-Marketing-only one.
+    const formOptions = readFileSync("src/server/ci/form-options/service.ts", "utf8");
+    expect(formOptions).toContain("authorizeCiUser");
+    expect(formOptions).not.toMatch(/authorizeCorporateMarketing|authorizeUserAccessManager|samba_|isDevMockAuthEnabled/);
     const gallery = readFileSync("src/server/ci/competitive-gallery/service.ts", "utf8");
     expect(gallery).toContain("authorizeCiUser");
     expect(gallery).not.toMatch(/authorizeUserAccessManager|samba_|isDevMockAuthEnabled/);

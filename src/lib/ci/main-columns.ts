@@ -9,4 +9,8 @@ export const RECORD_COLUMNS = {
   servedMarket: "served_market",
   quarter: "quarter",
   year: "year",
+  createdOn: "created_date",
+  modifiedOn: "modified_date",
+  active: "is_active",
+  applicationId: "application_id",
 } as const;

@@ -1,21 +1,13 @@
 import type { CompetitiveRecord } from "@/types/ci";
 import { FIELD_BY_KEY, FIELDS, RECORD_ID_LABEL, type FieldKey } from "@/lib/ci/field-spec";
-import { formatDate } from "@/lib/utils";
+import { formatStoredDate } from "@/lib/ci/stored-date";
 import type { GridColumn } from "@/components/ci/data-grid";
 
-/** Display formatting per the CI Prototype: whole numbers for counts, 2 decimals for ASP/Revenue. */
+/** A grid cell shows the value exactly as stored in Databricks (no number or label formatting), except the created date: dd-mmm-yyyy. A NULL / blank shows as empty. */
 export function displayValue(r: CompetitiveRecord, key: FieldKey): string {
   const raw = r[key];
   if (raw === null || raw === undefined || raw === "") return "";
-  if (key === "createdOn") return formatDate(String(raw));
-  if (key === "asp" || key === "revenue") {
-    const n = Number(raw);
-    return Number.isFinite(n) ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(raw);
-  }
-  if (key === "actualOrder") {
-    const n = Number(raw);
-    return Number.isFinite(n) ? n.toLocaleString("en-US", { maximumFractionDigits: 0 }) : String(raw);
-  }
+  if (key === "createdOn") return formatStoredDate(String(raw));
   return String(raw);
 }
 

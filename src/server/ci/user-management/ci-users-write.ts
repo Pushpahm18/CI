@@ -6,11 +6,12 @@ import { authorizeUserManagement } from "@/server/ci/authorization/dev-access";
 import { requireConnected } from "@/server/ci/connection";
 import { getUserRecordWriter, type UserRecordWriter } from "@/server/ci/databricks/user-records";
 import { serializeScopeDimension, type ScopeSetting } from "@/server/ci/authorization/scope";
+import { ownedRowIdsFor } from "@/server/ci/user-management/ci-users-offboard";
 import { getLookupStore } from "@/server/ci/databricks/lookups";
 import { resolveDirectoryUser, type ResolvedPerson } from "@/server/ci/user-access/resolve";
 import { ENTITY_USER, auditBeforeChange, change, diff, writeAuditHistory, type AuditWriter } from "@/server/ci/audit";
 import { validateUserForm, type ScopeInput, type UserFormContext, type UserFormValues } from "@/lib/ci/user-form";
-import { CM_ROLE, STATUS_ACTIVE, STATUS_OFFBOARDED, checkDeactivate, checkReactivate, checkRoleChange } from "@/lib/ci/user-rules";
+import { CM_ROLE, STATUS_ACTIVE, STATUS_OFFBOARDED, checkDeactivate, checkReactivate, checkReactivationRecord, checkRoleChange, isActiveRecord } from "@/lib/ci/user-rules";
 import type { CiUserRecordRaw, CiUserWriteResponse } from "@/types/ci-api";
 
 /**
@@ -52,6 +53,8 @@ export interface CiUsersWriteDeps {
   /** Confirms the person is in the Microsoft directory and returns the directory's own email and name (the browser's are never trusted). */
   directoryUser(email: string, typedName: string): Promise<{ email: string; userName: string } & Partial<Pick<ResolvedPerson, "aliases">>>;
   writer(): UserRecordWriter;
+  /** ci_id of the live ci_main rows created by this exact name (a user who created rows cannot be renamed). */
+  ownedRowIds?(name: string): Promise<string[]>;
   /** Writes the audit history entries (corp_marketing_dev.audit.ci_audit_history). */
   audit: AuditWriter;
 }
@@ -77,6 +80,7 @@ const defaultDeps: CiUsersWriteDeps = {
     if (!w) throw new NotConfiguredError(["CI User Management"]);
     return w;
   },
+  ownedRowIds: (name) => ownedRowIdsFor(name),
   audit: writeAuditHistory,
 };
 
@@ -148,7 +152,11 @@ export async function createCiUser(identity: SessionIdentity, body: unknown, dep
     // One record per PERSON: a record saved earlier under their other address (UPN vs mail) also blocks a new one.
     const aliases = person.aliases ?? [person.email];
     const clash = existing.find((u) => aliases.includes(u.email.trim().toLowerCase()));
-    if (clash) throw new ValidationError([`This person already has a CI user record (${clash.email}). CI keeps one record per person, so edit that record instead.`]);
+    if (clash) {
+      throw new ValidationError([
+        `This person already has a CI user record (${clash.email}). CI keeps one record per person, so ${isActiveRecord(clash) ? "edit" : "reactivate"} that record instead.`,
+      ]);
+    }
     const id = writer.newId();
     const masters = await deps.masters();
     const result = validateUserForm(values, { existing, signedIn: { name: actor.userName, email: actor.email }, newId: () => id, masters });
@@ -200,12 +208,17 @@ export async function updateCiUser(identity: SessionIdentity, idInput: unknown, 
     const all = await writer.list();
     const target = all.find((u) => u.id === id);
     if (!target) throw new NotFoundError("That user was not found.");
+    if (!isActiveRecord(target)) throw new ValidationError(["This user is off-boarded and cannot be edited. Reactivate the user first."]);
     if (values.email.trim().toLowerCase() !== target.email.trim().toLowerCase()) throw new ValidationError(["The email cannot be changed. Add a new user instead."]);
     const result = validateUserForm({ ...values, email: target.email }, { existing: all.filter((u) => u.id !== id), signedIn: { name: actor.userName, email: actor.email }, masters: await deps.masters() });
     if (!result.proposed) throw new ValidationError(Object.values(result.errors).filter((m): m is string => Boolean(m)));
     const blocked = checkRoleChange(target, result.proposed.role_name, all, actor.email);
     if (blocked) throw new ValidationError([blocked]);
     const p = result.proposed;
+    // ci_main.created_by holds the creator's NAME, so renaming a user who created rows would orphan them.
+    if (p.user_name.trim() !== target.userName.trim() && deps.ownedRowIds && (await deps.ownedRowIds(target.userName)).length > 0) {
+      throw new ValidationError([`${target.userName} has created rows, which are linked to this name. The name cannot be changed.`]);
+    }
     const scope = scopeTexts({ ...values, role: p.role_name });
     const changes = [
       diff("User Name", target.userName, p.user_name),
@@ -230,7 +243,7 @@ async function setActive(identity: SessionIdentity, idInput: unknown, active: bo
     const all = await writer.list();
     const target = all.find((u) => u.id === id);
     if (!target) throw new NotFoundError("That user was not found.");
-    const blocked = active ? checkReactivate(target) : checkDeactivate(target, all, actor.email);
+    const blocked = active ? checkReactivate(target) ?? checkReactivationRecord(target) : checkDeactivate(target, all, actor.email);
     if (blocked) throw new ValidationError([blocked]);
     const status = active ? STATUS_ACTIVE : STATUS_OFFBOARDED;
     await auditBeforeChange(deps.audit, [

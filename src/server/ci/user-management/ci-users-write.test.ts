@@ -408,6 +408,22 @@ describe("updateCiUser", () => {
     expect(last.calls).toEqual([]);
   });
 
+  it("refuses to edit an off-boarded user until they are reactivated", async () => {
+    const off = rec({ id: "off", userName: "Olive", email: "off@example.com", isActive: false, status: "Off-boarded" });
+    const { d, calls } = deps([CM, off]);
+    await expectValidation(updateCiUser(identity, "off", { ...edit, email: "off@example.com" }, d), /off-boarded and cannot be edited/);
+    expect(calls).toEqual([]);
+  });
+
+  it("cannot rename a user who has created rows, but can when they have none or the name is unchanged", async () => {
+    const withRows = deps([CM, AT], { ownedRowIds: async () => ["r1"] });
+    await expectValidation(updateCiUser(identity, "at", edit, withRows.d), /has created rows/);
+    expect(withRows.calls).toEqual([]);
+    await updateCiUser(identity, "at", { ...edit, userName: "Ann" }, withRows.d); // same name, new scope: allowed
+    const none = deps([CM, AT], { ownedRowIds: async () => [] });
+    expect((await updateCiUser(identity, "at", edit, none.d)).user.userName).toBe("Ann Lee");
+  });
+
   it("promoting an Account Team user to Corporate Marketing stores All / All / All", async () => {
     const { d } = deps([CM, AT]);
     const res = await updateCiUser(identity, "at", { ...edit, role: "Corporate Marketing" }, d);
@@ -438,6 +454,22 @@ describe("deactivate and reactivate (no physical delete)", () => {
     const { d } = deps([CM, off, AT]);
     expect((await reactivateCiUser(identity, "off", d)).user).toMatchObject({ isActive: true, status: "Active" });
     await expectValidation(reactivateCiUser(identity, "at", d), /already active/);
+  });
+
+  it("refuses to reactivate a record whose stored role or scope is invalid, changing nothing", async () => {
+    const badScope = rec({ id: "bad", email: "bad@example.com", isActive: false, status: "Off-boarded", customer: "oops" });
+    const badRole = rec({ id: "role", email: "role@example.com", isActive: false, status: "Off-boarded", role: "Admin" });
+    const { d, calls } = deps([CM, badScope, badRole]);
+    await expectValidation(reactivateCiUser(identity, "bad", d), /Edit the record before reactivating/);
+    await expectValidation(reactivateCiUser(identity, "role", d), /not valid/);
+    expect(calls).toEqual([]);
+  });
+
+  it("adding an off-boarded person's email says to reactivate, an active one to edit", async () => {
+    const off = rec({ id: "off", userName: "Olive", email: "off@example.com", isActive: false, status: "Off-boarded" });
+    const body = { userName: "Olive", email: "off@example.com", role: "Account Team", customers: "All", segments: "All", regions: "All" };
+    await expectValidation(createCiUser(identity, body, deps([CM, off]).d), /reactivate that record/);
+    await expectValidation(createCiUser(identity, { ...body, email: "ann@example.com" }, deps([CM, AT]).d), /edit that record/);
   });
 
   it("unauthorized callers cannot deactivate or reactivate", async () => {

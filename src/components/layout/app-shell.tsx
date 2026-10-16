@@ -151,7 +151,8 @@ function AppShellInner({ children }: { children: React.ReactNode }) {
   // reviewed — the server still refuses every data request until then.
   const showAll = !loading && !dataConnected;
   const allowed = (item: NavItem) => showAll || (user ? item.roles.includes(user.role) : false);
-  const items = NAV.filter(allowed);
+  // Home is not listed in the menu: the ASM logo at the top is the way to the Home screen.
+  const items = NAV.filter((item) => allowed(item) && item.href !== "/");
   // Screens that read their own Databricks source show their own connection
   // status, so the app-wide "CI database not yet connected" notice is hidden there.
   const ownDataSource = SCREENS_WITH_OWN_DATA_SOURCE.some((p) => pathname === p || pathname.startsWith(p + "/"));

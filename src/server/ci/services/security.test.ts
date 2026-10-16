@@ -20,8 +20,8 @@ const ci = await import("@/server/ci/services/competitive-info");
 const mgmt = await import("@/server/ci/services/management");
 const imp = await import("@/server/ci/services/import");
 const { rowRecipients } = await import("@/server/ci/notifications");
-const { fieldOptions, blankForm, canEditRecord } = await import("@/lib/ci/rules");
-const { ForbiddenError, NotFoundError, ValidationError, EditWindowClosedError } = await import("@/server/ci/errors");
+const { fieldOptions, blankForm, canEditRecord, editWindowMessage } = await import("@/lib/ci/rules");
+const { ForbiddenError, NotFoundError, ValidationError } = await import("@/server/ci/errors");
 
 const repo = getCiRepository();
 const THIS_YEAR = String(new Date().getFullYear());
@@ -110,8 +110,9 @@ describe("Add — submitted values are checked against the scope", () => {
     );
     await expect(ci.createRecordFor(salesA, { input: input({ fabLocation: "UMC Singapore" }), notes: ["x"] })).rejects.toBeInstanceOf(ForbiddenError);
   });
-  it("Sales cannot add rows for a locked year", async () => {
-    await expect(ci.createRecordFor(salesA, { input: input({ year: "2020" }), notes: ["x"] })).rejects.toBeInstanceOf(EditWindowClosedError);
+  it("Sales can add a row for any Year: the edit window follows the created date, which is today for a new row", async () => {
+    const { record } = await ci.createRecordFor(salesA, { input: input({ year: "2020" }), notes: ["x"] });
+    expect(record.year).toBe("2020");
   });
   it("Sales can add inside their scope; Fab Region is derived on the server", async () => {
     const { record } = await ci.createRecordFor(salesA, { input: input(), notes: ["New order seen at fab"] });
@@ -189,9 +190,16 @@ describe("Scope also drives notifications, dropdowns and the edit window", () =>
     const fabs = fieldOptions("fabLocation", { ...blankForm(), customer: "UMC" }, { ...options, user: salesA });
     expect(fabs.sort()).toEqual(["UMC Hsinchu", "UMC Tainan"]);
   });
-  it("Sales can't edit rows of a closed year; Corporate Marketing can", () => {
-    const old = { customer: "UMC", servedMarket: "Foundry", fabRegion: "Taiwan", year: "2020" };
-    expect(canEditRecord(salesA, old)).toBe(false);
-    expect(canEditRecord(cm, old)).toBe(true);
+  it("Account Team can edit a row only until 31 Dec of the year it was created; Corporate Marketing always can", () => {
+    const row = { customer: "UMC", servedMarket: "Foundry", fabRegion: "Taiwan", createdOn: "2026-10-16" };
+    expect(canEditRecord(salesA, row, new Date("2026-10-17T09:00:00Z"))).toBe(true);
+    expect(canEditRecord(salesA, row, new Date("2026-12-31T23:59:59Z"))).toBe(true);
+    expect(canEditRecord(salesA, row, new Date("2027-01-01T00:00:00Z"))).toBe(false);
+    expect(canEditRecord(cm, row, new Date("2030-06-01T00:00:00Z"))).toBe(true);
+    // A created date that cannot be read is locked, never open.
+    expect(canEditRecord(salesA, { ...row, createdOn: "" }, new Date("2026-10-17T09:00:00Z"))).toBe(false);
+  });
+  it("the locked message names the year it was created in", () => {
+    expect(editWindowMessage("2026-10-16")).toContain("until 31 Dec 2026");
   });
 });

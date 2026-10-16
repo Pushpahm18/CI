@@ -13,7 +13,6 @@ import {
   fabRegionFor,
   recordInScope,
   type ScopedRow,
-  salesEditWindowOpen,
   validateInput,
 } from "@/lib/ci/rules";
 import { FIELDS } from "@/lib/ci/field-spec";
@@ -142,8 +141,6 @@ export async function createRecordFor(user: CiUser, request: SaveRecordRequest):
 
   // Scope is checked on the submitted values (Fab Region derived here), never trusted from the browser.
   requireRowInScope(user, { ...input, fabRegion: derive(input, options).fabRegion });
-  // CI Prototype: Sales can add rows only for open years (BRD §5.2).
-  if (user.role === "Sales" && !salesEditWindowOpen(input.year)) throw new EditWindowClosedError(editWindowMessage(input.year));
   const errors = validateInput(input, { ...options, user });
   if (errors.length) throw new ValidationError(errors);
 
@@ -186,15 +183,14 @@ export async function createRecordFor(user: CiUser, request: SaveRecordRequest):
 
 export async function updateRecordFor(user: CiUser, recordId: string, request: SaveRecordRequest): Promise<SaveRecordResponse> {
   const existing = await loadVisibleRecord(user, recordId);
-  // BRD §5.2: Sales may edit only inside the open window; CM is exempt.
-  if (!canEditRecord(user, existing)) throw new EditWindowClosedError(editWindowMessage(existing.year));
+  // Account Team may edit a row only until 31 Dec of the year it was created; Corporate Marketing is exempt.
+  if (!canEditRecord(user, existing)) throw new EditWindowClosedError(editWindowMessage(existing.createdOn));
 
   const notes = requireChangeNote(request.notes);
   const input = normalise(request.input);
   const options = await loadFormOptions();
   // The edited values must stay inside the user's scope too (no moving a row out of — or into — scope).
   requireRowInScope(user, { ...input, fabRegion: derive(input, options).fabRegion });
-  if (user.role === "Sales" && !salesEditWindowOpen(input.year)) throw new EditWindowClosedError(editWindowMessage(input.year));
   const errors = validateInput(input, { ...options, user }, existing);
   if (errors.length) throw new ValidationError(errors);
 

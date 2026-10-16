@@ -1,4 +1,5 @@
 import { parseScopeArray, parseScopeDimension, serializeScopeDimension, type ScopeSetting } from "@/server/ci/authorization/scope";
+import { USER_ROLES, isActiveRecord } from "@/lib/ci/user-rules";
 import type { CiUserRecordRaw } from "@/types/ci-api";
 
 /**
@@ -20,7 +21,7 @@ import type { CiUserRecordRaw } from "@/types/ci-api";
  * region columns.
  */
 
-export const USER_ROLES = ["Account Team", "Corporate Marketing"] as const;
+export { USER_ROLES };
 export type UserRole = (typeof USER_ROLES)[number];
 
 /** "All", or the specific values chosen. */
@@ -93,7 +94,14 @@ function scopeError(field: ScopeField, input: ScopeInput, master: string[] | und
   return null;
 }
 
-const domainOf = (email: string) => email.split("@")[1]?.toLowerCase() ?? "";
+/** Why an email that already has a record cannot be added again: CI keeps one record per email, so an off-boarded person is reactivated and an active one edited. */
+export function existingRecordMessage(record: CiUserRecordRaw): string {
+  return isActiveRecord(record)
+    ? "This email already has a CI user record. CI keeps one record per email, so edit that record instead."
+    : "This email already has a CI user record that is off-boarded. CI keeps one record per email, so reactivate that record instead of adding it again.";
+}
+
+const domainOf =(email: string) => email.split("@")[1]?.toLowerCase() ?? "";
 
 export function validateUserForm(values: UserFormValues, ctx: UserFormContext): UserFormResult {
   const errors: UserFormResult["errors"] = {};
@@ -107,7 +115,7 @@ export function validateUserForm(values: UserFormValues, ctx: UserFormContext): 
   if (!email) errors.email = "Enter the user's email address.";
   else if (email.length > 254 || !isValidEmail(email)) errors.email = "Enter one valid email address.";
   else if (ctx.existing.some((u) => u.email.trim().toLowerCase() === email)) {
-    errors.email = "This email already has a CI user record. CI keeps one record per email, so edit that record instead.";
+    errors.email = existingRecordMessage(ctx.existing.find((u) => u.email.trim().toLowerCase() === email)!);
   } else if (ctx.signedIn && domainOf(email) !== domainOf(ctx.signedIn.email)) {
     warnings.push(`This address is not in your domain (${domainOf(ctx.signedIn.email)}).`);
   }

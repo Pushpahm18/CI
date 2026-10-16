@@ -7,6 +7,7 @@ import { ScopeSelect } from "@/components/ci/scope-select";
 import { Input, Label, Select } from "@/components/ui/input";
 import { ApiError } from "@/lib/ci/api";
 import { MICROSOFT_DIRECTORY_PICKER_ENABLED } from "@/lib/ci/directory-picker";
+import { isActiveRecord } from "@/lib/ci/user-rules";
 import {
   EMPTY_USER_FORM,
   SCOPE_LABELS,
@@ -49,6 +50,7 @@ export function UserFormCard({
   suggestions,
   onCancel,
   onSave,
+  onReactivate,
 }: {
   /** Every OTHER record already known, for the one-record-per-email check. */
   existing: CiUserRecordRaw[];
@@ -62,6 +64,8 @@ export function UserFormCard({
   onCancel: () => void;
   /** Sends the user to the server. Throws on failure; the message is shown in the form. */
   onSave: (values: UserFormValues) => Promise<void>;
+  /** Add New User only: reactivates the off-boarded record that has the typed email. Throws on failure. */
+  onReactivate?: (record: CiUserRecordRaw) => Promise<void>;
 }) {
   const [values, setValues] = React.useState<UserFormValues>(() => (editing ? valuesFromRecord(editing) : EMPTY_USER_FORM));
   const [result, setResult] = React.useState<UserFormResult | null>(null);
@@ -81,7 +85,22 @@ export function UserFormCard({
   const err = (f: UserFormField) => result?.errors[f];
   const isCm = values.role === "Corporate Marketing";
   const isAccountTeam = values.role === "Account Team";
-  const existingEmails = React.useMemo(() => new Set(existing.map((u) => u.email.trim().toLowerCase())), [existing]);
+  // The picker blocks emails that already have an ACTIVE record; an off-boarded person can be picked, and is then offered Reactivate.
+  const existingEmails = React.useMemo(() => new Set(existing.filter(isActiveRecord).map((u) => u.email.trim().toLowerCase())), [existing]);
+  const offboarded = !editing && onReactivate ? existing.find((u) => !isActiveRecord(u) && u.email.trim().toLowerCase() === values.email.trim().toLowerCase()) : undefined;
+  const [reactivating, setReactivating] = React.useState(false);
+
+  async function reactivate(record: CiUserRecordRaw) {
+    if (!onReactivate) return;
+    setReactivating(true);
+    setSaveError([]);
+    try {
+      await onReactivate(record);
+    } catch (e) {
+      setSaveError(e instanceof ApiError && e.details.length ? e.details : [e instanceof Error ? e.message : "Reactivating failed."]);
+      setReactivating(false);
+    }
+  }
   const typed = Boolean(editing) || !MICROSOFT_DIRECTORY_PICKER_ENABLED;
 
   async function save() {
@@ -204,6 +223,18 @@ export function UserFormCard({
               ? "For each one, choose Select All or tick specific values. Any mix works, for example one customer with all served markets and all regions."
               : "Choose a role to set the scope. Corporate Marketing gets All for all three; Account Team chooses All or specific values for each."}
         </p>
+
+        {offboarded && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-accent-bg-strong bg-accent-bg px-3 py-2 text-[12.5px] text-accent">
+            <p>
+              <span className="font-medium">{offboarded.userName || offboarded.email}</span> was off-boarded. CI keeps one record per email, so reactivate that record instead of adding it again. It comes back with the
+              role and scope stored on it.
+            </p>
+            <Button size="sm" onClick={() => void reactivate(offboarded)} disabled={reactivating || saving}>
+              {reactivating ? "Reactivating…" : "Reactivate"}
+            </Button>
+          </div>
+        )}
 
         {result && result.warnings.length > 0 && (
           <div className="rounded-md border border-warning/30 bg-warning-bg px-3 py-2 text-[12.5px] text-warning">

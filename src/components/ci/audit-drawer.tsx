@@ -95,13 +95,20 @@ function Entry({ entry, isLast }: { entry: AuditEntry; isLast: boolean }) {
 }
 
 /** BRD §7.3 Audit Trail: who, when, field-level previous/new values and the Change Note. Append-only. */
-export function AuditDrawer({ record, onClose }: { record: Pick<CompetitiveRecord, "recordId" | "customer" | "servedMarket" | "quarter" | "year"> | null; onClose: () => void }) {
+export function AuditDrawer({
+  record,
+  onClose,
+}: {
+  /** The history is looked up by recordId (ci_id); the title shows the row's Application ID when it has one. */
+  record: (Pick<CompetitiveRecord, "recordId" | "customer" | "servedMarket" | "quarter" | "year"> & { applicationId?: string }) | null;
+  onClose: () => void;
+}) {
   return (
     <Drawer
       open={Boolean(record)}
       onClose={onClose}
       width="max-w-xl"
-      title={record ? `Audit Trail · ${record.recordId}` : "Audit Trail"}
+      title={record ? `Audit Trail · ${record.applicationId || record.recordId}` : "Audit Trail"}
       subtitle={record ? `${record.customer} · ${record.servedMarket} · ${record.quarter} ${record.year}` : undefined}
     >
       <p className="mb-4 text-[12px] text-muted">Entries are append-only and cannot be edited or deleted.</p>

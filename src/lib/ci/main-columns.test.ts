@@ -9,5 +9,9 @@ describe("the browser's ci_main column names", () => {
     expect(RECORD_COLUMNS.servedMarket).toBe(MAIN_COLUMNS.servedMarket);
     expect(RECORD_COLUMNS.quarter).toBe(MAIN_COLUMNS.quarter);
     expect(RECORD_COLUMNS.year).toBe(MAIN_COLUMNS.year);
+    expect(RECORD_COLUMNS.createdOn).toBe(MAIN_COLUMNS.createdOn);
+    expect(RECORD_COLUMNS.modifiedOn).toBe(MAIN_COLUMNS.modifiedOn);
+    expect(RECORD_COLUMNS.active).toBe(MAIN_COLUMNS.active);
+    expect(RECORD_COLUMNS.applicationId).toBe(MAIN_COLUMNS.applicationId);
   });
 });

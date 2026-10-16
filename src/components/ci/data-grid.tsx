@@ -102,6 +102,7 @@ export function DataGrid<T>({
   actions,
   actionsLabel = "",
   actionsAt = "start",
+  rowClassName,
   toolbar,
   emptyState,
   loading,
@@ -118,6 +119,8 @@ export function DataGrid<T>({
   actionsLabel?: string;
   /** Which side the actions column sits on (default: the start). */
   actionsAt?: "start" | "end";
+  /** Extra classes for a row (for example to highlight rows in a particular state). */
+  rowClassName?: (row: T) => string | undefined;
   /**
    * Left-aligned toolbar content; receives every row currently matching search +
    * filters, and the columns currently shown (Show Columns), in display order.
@@ -264,7 +267,7 @@ export function DataGrid<T>({
               </THead>
               <TBody>
                 {pageItems.map((r) => (
-                  <TR key={rowKey(r)}>
+                  <TR key={rowKey(r)} className={rowClassName?.(r)}>
                     {actions && actionsAt === "start" && <TD>{actions(r)}</TD>}
                     {shownColumns.map((c) => (
                       <TD key={c.key} className={cn(c.numeric && "tabular-nums")}>

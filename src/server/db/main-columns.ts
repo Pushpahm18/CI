@@ -34,6 +34,8 @@ export const MAIN_COLUMNS = {
   modifiedBy: "modified_by",
   modifiedOn: "modified_date",
   active: "is_active",
+  /** The last column of ci_main (string, e.g. CI-0001), shown first in All Competitive Info View. */
+  applicationId: "application_id",
 } as const;
 
 Object.values(MAIN_COLUMNS).forEach(assertIdentifier);

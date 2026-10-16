@@ -84,25 +84,34 @@ export function recordInScope(user: CiUser, row: ScopedRow): boolean {
 
 // ---------------------------------------------------------------- edit window
 
+/** The calendar year a stored created_date ("2026-10-16", or a full timestamp) falls in; null when it cannot be read. */
+function createdYear(createdOn: string): number | null {
+  const m = /^(\d{4})-\d{2}-\d{2}/.exec(createdOn.trim());
+  return m ? Number(m[1]) : null;
+}
+
 /**
- * BRD §5.2: a row for Year Y stays editable by Account Team users until 31 December of
- * Y+1; after that it is view-only for Sales. Corporate Marketing is exempt.
+ * Edit window (owner decision, replacing the BRD §5.2 Year-field rule): an Account Team user can edit a row only until 31 December
+ * of the calendar year it was CREATED in (created 16-Oct-2026 -> editable until 31-Dec-2026, locked from 1-Jan-2027), after which it
+ * is view-only for them. Corporate Marketing is exempt. The date is the row's stored created_date; one that cannot be read is
+ * treated as locked, never as open. The year is the UTC year, like the stored date.
  */
-export function salesEditWindowOpen(year: string, today: Date = new Date()): boolean {
-  const y = Number(year);
-  if (!Number.isInteger(y)) return false;
-  return today.getFullYear() <= y + 1;
+export function salesEditWindowOpen(createdOn: string, today: Date = new Date()): boolean {
+  const y = createdYear(createdOn);
+  return y !== null && today.getUTCFullYear() <= y;
 }
 
-export function editWindowMessage(year: string): string {
-  const y = Number(year);
-  return `Locked: Year ${year} rows are editable by Sales until 31 Dec ${Number.isInteger(y) ? y + 1 : ""}. Ask Corporate Marketing to change it.`;
+export function editWindowMessage(createdOn: string): string {
+  const y = createdYear(createdOn);
+  return y === null
+    ? "Locked: this row's created date could not be read. Ask Corporate Marketing to change it."
+    : `Locked: this row was created in ${y}, so Account Team can edit it only until 31 Dec ${y}. Ask Corporate Marketing to change it.`;
 }
 
-/** BRD §4 / §5.1 step 3: CM may always edit; Sales only rows in their scope and inside the open window. */
-export function canEditRecord(user: CiUser, record: ScopedRow & Pick<CompetitiveRecord, "year">, today = new Date()): boolean {
+/** BRD §4 / §5.1 step 3: CM may always edit; Sales only rows in their scope and inside the edit window. */
+export function canEditRecord(user: CiUser, record: ScopedRow & Pick<CompetitiveRecord, "createdOn">, today = new Date()): boolean {
   if (user.role === "CM") return true;
-  return recordInScope(user, record) && salesEditWindowOpen(record.year, today);
+  return recordInScope(user, record) && salesEditWindowOpen(record.createdOn, today);
 }
 
 /**
@@ -183,11 +192,9 @@ export function fieldOptions(key: UserFieldKey, form: FormState, ctx: OptionsCon
       const markets = lookupOptions(lookups, "Served Market");
       return sales ? markets.filter((m) => scopeIncludes(sales.segmentScope, m)) : markets;
     }
-    case "year": {
-      // CI Prototype: Sales can use open years only (BRD §5.2 edit window).
-      const years = lookupOptions(lookups, "Year");
-      return sales ? years.filter((y) => salesEditWindowOpen(y)) : years;
-    }
+    case "year":
+      // The edit window follows the row's created date now, not its Year, so every Year in the list is offered.
+      return lookupOptions(lookups, "Year");
     case "fabLocation": {
       if (!form.customer) return [];
       const all = reference.customerFabs.filter((f) => f.customer === form.customer);
